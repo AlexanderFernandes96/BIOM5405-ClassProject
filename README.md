@@ -12,7 +12,12 @@ be used to classify blind data over the course of a two week period.
 For more details please see [project background](/project-background.pdf)
 and [project instructions](/project-instructions.pdf)
 
-## Installation
+## Installation Instructions
+Either clone or download project folder then ensure the following:
+* Directly unzip training data from [train.zip](train.zip) as: train/\<thetrainingdata\>
+* Install machine learning python directories, you can follow this website https://machinelearningmastery.com/setup-python-environment-machine-learning-deep-learning-anaconda/
+  * ensure [python/versions.py](python/versions.py) runs without errors
+  * Install deep learning directories such that [python/deep-versions.py](python/deep-versions.py) runs without errors.
 
 ## Project Members
 
