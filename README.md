@@ -22,4 +22,4 @@ Either clone or download project folder then ensure the following:
 ## Project Members
 
 * **Alexander Fernandes [github](https://github.com/Catfider), [gitlab](https://gitlab.com/AlexFernandes)**
-* **Curtis Lacelle**
+* **Curtis Lacelle** [github](http://github.com/curtislacelle)
