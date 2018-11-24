@@ -3,6 +3,7 @@
 website references:
 https://www.kaggle.com/ternaryrealm/lstm-time-series-explorations-with-keras"""
 
+import time
 from os import listdir
 from os.path import isfile, join
 from numpy import genfromtxt
@@ -12,7 +13,6 @@ from keras.layers import Dense
 from keras.layers import LSTM
 from keras.layers.convolutional import Conv1D
 from keras.layers.convolutional import MaxPooling1D
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import StratifiedKFold
 
@@ -55,6 +55,9 @@ def load_data(folder):
 
 # Run the following script using the following command via "python -m LSTMN.py"
 if __name__ == "__main__":
+    # Time Start
+    start_time = time.time()
+
     project_folder = '/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/'
     project_folder = 'D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/'
 
@@ -106,10 +109,10 @@ if __name__ == "__main__":
 
         # compile and fit our model
         model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-        model.fit(X_train, y_train, validation_split=0.2, epochs=15, batch_size=64, verbose=0)
+        model.fit(X_train, y_train, validation_split=0.2, epochs=6, batch_size=64, verbose=1)
 
         # evaluate model
-        scores = model.evaluate(X_test, y_test, verbose=0)
+        scores = model.evaluate(X_test, y_test, verbose=1)
         print("%s: %.2f%%" % (model.metrics_names[1], scores[1] * 100))
         cvscores.append(scores[1]*100)
 
@@ -121,8 +124,11 @@ if __name__ == "__main__":
     # cm = confusion_matrix(y_test, y_pred)
     # print(cm)
 
-
-
+    # Time End
+    elapsed_time = time.time()
+    hours, rem = divmod(elapsed_time - start_time, 3600)
+    minutes, seconds = divmod(rem, 60)
+    print("Elapsed Time: {:0>2}:{:0>2}:{:05.2f}".format(int(hours), int(minutes), seconds))
 
 
 
