@@ -56,41 +56,57 @@ def load_data(folder):
 # Run the following script using the following command via "python -m LSTMN.py"
 if __name__ == "__main__":
     project_folder = '/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/'
+    project_folder = 'D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/'
+
     X_total, y_total = load_data(project_folder + 'train/')
 
-    X_train, X_test, y_train, y_test = train_test_split(X_total, y_total, test_size=0.3)
-
     print('X_total =', X_total.shape)
-    print('X_train =', X_train.shape)
-    print('X_test =', X_test.shape)
 
     # The model will be designed in the following manner:
     # CNN 1D -> Pooling -> LSTMN -> 1 sigmoid Dense Layer
 
-    # define 10-fold cross validation test harness
-    kfold = StratifiedKFold(n_splits=10, shuffle=True, random_state=seed)
+    # define 5-fold cross validation test harness
+    kfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)
     cvscores = []
 
-    for train, test in kfold.split(X_total, y_total):
+    for train_index, test_index in kfold.split(X_total, y_total):
+        X_train, X_test = X_total[train_index], X_total[test_index]
+        y_train, y_test = y_total[train_index], y_total[test_index]
+
+        print("TRAIN:", train_index, "TEST:", test_index)
+
+        n_timesteps = X_train.shape[1]
+        n_features = X_train.shape[2]
+        if LABEL_ALS == LABEL_HUNT == LABEL_PARK:
+            # Health vs Diseased
+            n_outputs = 1
+        else:
+            # Classify Disease Type
+            n_outputs = 4
+
         # initialize a sequential keras model
         model = Sequential()
 
-        # CNN 1D
-        model.add(Conv1D(filters=32, kernel_size=3, padding='same', activation='relu'))
+        # Input: CNN 1D
+        model.add(Conv1D(filters=32,
+                         kernel_size=3,
+                         padding='same',
+                         activation='relu',
+                         input_shape=(n_timesteps, n_features)))
 
         # Pooling
         model.add(MaxPooling1D(pool_size=2))
 
         # LSTM Layer
-        num_LSTM_cells = 20
+        num_LSTM_cells = 100
         model.add(LSTM(num_LSTM_cells, dropout=0.2, recurrent_dropout=0.2))
 
-        # classification Dense Layer
-        model.add(Dense(1, activation='sigmoid'))
+        # Output: Dense Layer Classifier
+        model.add(Dense(n_outputs, activation='softmax'))
 
         # compile and fit our model
         model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-        model.fit(X_train, y_train, validation_split=0.2, epochs=15, batch_size=64, verbose=2)
+        model.fit(X_train, y_train, validation_split=0.2, epochs=15, batch_size=64, verbose=0)
 
         # evaluate model
         scores = model.evaluate(X_test, y_test, verbose=0)
