@@ -4,6 +4,7 @@ website references:
 https://www.kaggle.com/ternaryrealm/lstm-time-series-explorations-with-keras"""
 
 import time
+import itertools
 from os import listdir
 from os.path import isfile, join
 from numpy import genfromtxt
@@ -13,18 +14,30 @@ from keras.layers import Dense
 from keras.layers import LSTM
 from keras.layers.convolutional import Conv1D
 from keras.layers.convolutional import MaxPooling1D
+from keras.utils import to_categorical
 from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import StratifiedKFold
+import matplotlib.pyplot as plt
+
 
 # fix random seed for reproducibility
-seed = 7
-np.random.seed(seed)
+# seed = 7
+# np.random.seed(seed)
 
 # Class Labels
-LABEL_CTRL = 0
-LABEL_ALS = 1
-LABEL_HUNT = 1
-LABEL_PARK = 1
+NUM_CLASS = 4
+
+if NUM_CLASS == 4:
+    LABEL_CTRL = 0
+    LABEL_ALS = 1
+    LABEL_HUNT = 2
+    LABEL_PARK = 3
+    class_names = ['Control', 'ALS', 'Hunting', 'Parkingson']
+else:
+    LABEL_CTRL = 0
+    LABEL_ALS = 1
+    LABEL_HUNT = 1
+    LABEL_PARK = 1
 
 def load_data(folder):
     file_list = [f for f in listdir(folder) if isfile(join(folder, f))]
@@ -52,6 +65,39 @@ def load_data(folder):
 
     return X, np.asarray(y)
 
+def plot_confusion_matrix(cm, classes,
+                          normalize=False,
+                          title='Confusion matrix',
+                          cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        print("Normalized confusion matrix")
+    else:
+        print('Confusion matrix, without normalization')
+
+    print(cm)
+
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45)
+    plt.yticks(tick_marks, classes)
+
+    fmt = '.2f' if normalize else 'd'
+    thresh = cm.max() / 2.
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, format(cm[i, j], fmt),
+                 horizontalalignment="center",
+                 color="white" if cm[i, j] > thresh else "black")
+
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+    plt.tight_layout()
 
 # Run the following script using the following command via "python -m LSTMN.py"
 if __name__ == "__main__":
@@ -59,33 +105,40 @@ if __name__ == "__main__":
     start_time = time.time()
 
     project_folder = '/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/'
-    project_folder = 'D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/'
+    # project_folder = 'D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/'
 
     X_total, y_total = load_data(project_folder + 'train/')
 
     print('X_total =', X_total.shape)
 
+    n_timesteps = X_total.shape[1]
+    n_features = X_total.shape[2]
+    if LABEL_ALS == LABEL_HUNT == LABEL_PARK:
+        # Health vs Diseased
+        n_outputs = 1
+    else:
+        # Classify Disease Type
+        n_outputs = 4
+
+    print("Number Classes:", n_outputs)
+
     # The model will be designed in the following manner:
     # CNN 1D -> Pooling -> LSTMN -> 1 sigmoid Dense Layer
 
     # define 5-fold cross validation test harness
-    kfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)
+    kfold = StratifiedKFold(n_splits=5, shuffle=True)
     cvscores = []
+    cm_sum = None
 
     for train_index, test_index in kfold.split(X_total, y_total):
+
         X_train, X_test = X_total[train_index], X_total[test_index]
         y_train, y_test = y_total[train_index], y_total[test_index]
 
-        print("TRAIN:", train_index, "TEST:", test_index)
+        y_train = to_categorical(y_train, num_classes=n_outputs)
+        y_test = to_categorical(y_test, num_classes=n_outputs)
 
-        n_timesteps = X_train.shape[1]
-        n_features = X_train.shape[2]
-        if LABEL_ALS == LABEL_HUNT == LABEL_PARK:
-            # Health vs Diseased
-            n_outputs = 1
-        else:
-            # Classify Disease Type
-            n_outputs = 4
+        print("TRAIN:", train_index, "TEST:", test_index)
 
         # initialize a sequential keras model
         model = Sequential()
@@ -101,34 +154,75 @@ if __name__ == "__main__":
         model.add(MaxPooling1D(pool_size=2))
 
         # LSTM Layer
-        num_LSTM_cells = 100
+        num_LSTM_cells = 10
         model.add(LSTM(num_LSTM_cells, dropout=0.2, recurrent_dropout=0.2))
 
         # Output: Dense Layer Classifier
-        model.add(Dense(n_outputs, activation='softmax'))
-
         # compile and fit our model
-        model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-        model.fit(X_train, y_train, validation_split=0.2, epochs=6, batch_size=64, verbose=1)
+        if NUM_CLASS == 2:
+            model.add(Dense(n_outputs, activation='sigmoid'))
+            model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+        elif NUM_CLASS == 4:
+            model.add(Dense(n_outputs, activation='softmax'))
+            model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+        model.fit(X_train, y_train, validation_split=0.2, epochs=6, batch_size=64, verbose=2)
 
         # evaluate model
-        scores = model.evaluate(X_test, y_test, verbose=1)
+        scores = model.evaluate(X_test, y_test, verbose=2)
         print("%s: %.2f%%" % (model.metrics_names[1], scores[1] * 100))
         cvscores.append(scores[1]*100)
 
-        y_pred = (model.predict(X_test, batch_size=64) > 0.5)
+        y_pred = model.predict(X_test, batch_size=64)
+
+        # classify output prediction
+        if NUM_CLASS == 2:
+            y_pred = (y_pred > 0.5)
+        elif NUM_CLASS == 4:
+            y_ohe = y_pred
+            y_pred = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                y_pred.append(mx_i)
+            y_ohe = y_test
+            y_test = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                y_test.append(mx_i)
+
+        print("y_test:", y_test)
+        print("y_pred:", y_pred)
+
+        # confusion matrix
+        if cm_sum is None:
+            cm_sum = confusion_matrix(y_test, y_pred)
+        else:
+            cm_sum += confusion_matrix(y_test, y_pred)
 
     print("%.2f%% (+/- %.2f%%)" % (np.mean(cvscores), np.std(cvscores)))
 
-    # # confusion matrix
-    # cm = confusion_matrix(y_test, y_pred)
-    # print(cm)
+    # Plot non-normalized confusion matrix
+    plt.figure()
+    plot_confusion_matrix(cm_sum, classes=class_names, title='Confusion matrix, without normalization')
 
     # Time End
     elapsed_time = time.time()
     hours, rem = divmod(elapsed_time - start_time, 3600)
     minutes, seconds = divmod(rem, 60)
     print("Elapsed Time: {:0>2}:{:0>2}:{:05.2f}".format(int(hours), int(minutes), seconds))
+
+    plt.show()
 
 
 
