@@ -11,8 +11,7 @@ from os.path import isfile, join
 from numpy import genfromtxt
 import numpy as np
 from keras.models import Sequential
-from keras.layers import Dense
-from keras.layers import LSTM
+from keras.layers import LSTM, Dense
 from keras.wrappers.scikit_learn import KerasRegressor
 from keras.layers.convolutional import Conv1D
 from keras.layers.convolutional import MaxPooling1D
@@ -103,19 +102,27 @@ def load_data(folder):
     return X_crop, np.asarray(y)
 
 
-def baseline_model(num_lstm_cells=NUM_LSTM_CELLS):
+def baseline_model(num_lstm_cells=NUM_LSTM_CELLS, num_time_series=(NUM_TIME_SERIES-NUM_TS_CROP)):
     # The model will be designed in the following manner:
     # LSTM -> 1 sigmoid Dense Layer
 
     # initialize a sequential keras model
     model = Sequential()
 
-    # # Input: CNN 1D
-    # model.add(Conv1D(filters=8,
+    # Input:
+    model.add(Dense(NUM_FEATURES, activation='relu',
+                    input_shape=(num_time_series, NUM_FEATURES)))
+    model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
+    model.add(Dense(2, activation='relu'))
+    model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
+    model.add(Dense(NUM_FEATURES, activation='sigmoid'))
+
+    # CNN 1D
+    # model.add(Conv1D(filters=32,
     #                  kernel_size=3,
     #                  padding='same',
     #                  activation='relu',
-    #                  input_shape=(NUM_TIME_SERIES-NUM_TS_CROP, NUM_FEATURES)))
+    #                  input_shape=(num_time_series, NUM_FEATURES)))
     #
     # # Pooling
     # model.add(MaxPooling1D(pool_size=2))
@@ -124,11 +131,10 @@ def baseline_model(num_lstm_cells=NUM_LSTM_CELLS):
     model.add(LSTM(num_lstm_cells,
                    dropout=0.1,
                    recurrent_dropout=0.1,
-                   # return_sequences=True,
-                   input_shape=(NUM_TIME_SERIES - NUM_TS_CROP, NUM_FEATURES)))
+                   return_sequences=True))
 
     # LSTM Support Layer
-    # model.add(LSTM(NUM_FEATURES))
+    model.add(LSTM(2))
 
     # Output: Dense Layer Classifier
     # compile and fit our model

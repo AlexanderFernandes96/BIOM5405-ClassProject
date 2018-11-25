@@ -23,13 +23,15 @@ if __name__ == "__main__":
     # project_folder = 'D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/'
 
     # Meta Learning Classifier Parameters
-    sml_lstm_units = 10
-    med_lstm_units = 50
-    lrg_lstm_units = 100
+    tin_lstm_units = 1
+    sml_lstm_units = 2
+    med_lstm_units = 5
+    lrg_lstm_units = 10
+    hug_lstm_units = 15
 
     # LSTMN Parameters:
     lstmn.NUM_CLASS = 4  # Change to two for Healthy vs Diseased binary classification
-    lstmn.NUM_EPOCH = 15
+    lstmn.NUM_EPOCH = 6
     lstmn.BATCH_SIZE = 10
 
     if lstmn.NUM_CLASS == 4:
@@ -66,6 +68,10 @@ if __name__ == "__main__":
     print("Cropped Time Series Length:", n_timesteps)
     print("Number Features:", lstmn.NUM_FEATURES)
 
+    # Time series split
+    num_classifiers = 5
+    n_timesteps = int(n_timesteps / num_classifiers)
+
     # define 5-fold cross validation test harness
     kfold = StratifiedKFold(n_splits=lstmn.NUM_K_SPLIT, shuffle=True)
     cvscores = []
@@ -87,65 +93,116 @@ if __name__ == "__main__":
         print("TRAIN/VAL:", len(train_index), train_index.tolist())
         print("TEST:", len(test_index), test_index.tolist())
 
-        # Bootstrap new data for each classifier
-        X_s_train = X_train;
-        y_s_train = y_train
-        X_m_train = X_train;
-        y_m_train = y_train
-        X_l_train = X_train;
-        y_l_train = y_train
-        for i in range(0, len(X_train)):
-            s = random.randint(0, len(X_train) - 1)
-            X_s_train[i] = X_train[s]
-            y_s_train[i] = y_train[s]
+        # Split Data from time series axis into equal portions
+        X_1_train = np.empty([X_train.shape[0], n_timesteps, lstmn.NUM_FEATURES], float)
+        X_2_train = X_1_train
+        X_3_train = X_1_train
+        X_4_train = X_1_train
+        X_5_train = X_1_train
 
-            m = random.randint(0, len(X_train) - 1)
-            X_m_train[i] = X_train[m]
-            y_m_train[i] = y_train[m]
+        X_1_test = np.empty([X_test.shape[0], n_timesteps, lstmn.NUM_FEATURES], float)
+        X_2_test = X_1_test
+        X_3_test = X_1_test
+        X_4_test = X_1_test
+        X_5_test = X_1_test
 
-            l = random.randint(0, len(X_train) - 1)
-            X_l_train[i] = X_train[l]
-            y_l_train[i] = y_train[l]
+        for sub in range(X_train.shape[0]):
+            X_1_train[sub, :, :] = X_train[sub, 0*n_timesteps:1*n_timesteps, :]
+            X_2_train[sub, :, :] = X_train[sub, 1*n_timesteps:2*n_timesteps, :]
+            X_3_train[sub, :, :] = X_train[sub, 2*n_timesteps:3*n_timesteps, :]
+            X_4_train[sub, :, :] = X_train[sub, 3*n_timesteps:4*n_timesteps, :]
+            X_5_train[sub, :, :] = X_train[sub, 4*n_timesteps:5*n_timesteps, :]
+        for sub in range(X_test.shape[0]):
+            X_1_test[sub, :, :] = X_test[sub, 0*n_timesteps:1*n_timesteps, :]
+            X_2_test[sub, :, :] = X_test[sub, 1*n_timesteps:2*n_timesteps, :]
+            X_3_test[sub, :, :] = X_test[sub, 2*n_timesteps:3*n_timesteps, :]
+            X_4_test[sub, :, :] = X_test[sub, 3*n_timesteps:4*n_timesteps, :]
+            X_5_test[sub, :, :] = X_test[sub, 4*n_timesteps:5*n_timesteps, :]
+
+        y_1_train = y_train
+        y_2_train = y_train
+        y_3_train = y_train
+        y_4_train = y_train
+        y_5_train = y_train
+
+        print("Tiny   | train:",  X_1_train.shape, "test:", X_1_test.shape)
+        print("Small  | train:",  X_2_train.shape, "test:", X_2_test.shape)
+        print("Medium | train:",  X_3_train.shape, "test:", X_3_test.shape)
+        print("Large  | train:",  X_4_train.shape, "test:", X_4_test.shape)
+        print("Huge   | train:",  X_5_train.shape, "test:", X_5_test.shape)
 
         # Split validation set from the training set
-        X_s_train, X_s_val, y_s_train, y_s_val = train_test_split(X_s_train, y_s_train, test_size=lstmn.VAL_SPLIT)
-        X_m_train, X_m_val, y_m_train, y_m_val = train_test_split(X_m_train, y_m_train, test_size=lstmn.VAL_SPLIT)
-        X_l_train, X_l_val, y_l_train, y_l_val = train_test_split(X_l_train, y_l_train, test_size=lstmn.VAL_SPLIT)
+        X_1_train, X_1_val, y_1_train, y_1_val = train_test_split(X_1_train, y_1_train, test_size=lstmn.VAL_SPLIT)
+        X_2_train, X_2_val, y_2_train, y_2_val = train_test_split(X_2_train, y_2_train, test_size=lstmn.VAL_SPLIT)
+        X_3_train, X_3_val, y_3_train, y_3_val = train_test_split(X_3_train, y_3_train, test_size=lstmn.VAL_SPLIT)
+        X_4_train, X_4_val, y_4_train, y_4_val = train_test_split(X_4_train, y_4_train, test_size=lstmn.VAL_SPLIT)
+        X_5_train, X_5_val, y_5_train, y_5_val = train_test_split(X_5_train, y_5_train, test_size=lstmn.VAL_SPLIT)
 
         # Classifiers: Small, Medium, Large lstmn models
-        model_s = lstmn.baseline_model(sml_lstm_units)
-        model_m = lstmn.baseline_model(med_lstm_units)
-        model_l = lstmn.baseline_model(lrg_lstm_units)
+        model_1 = lstmn.baseline_model(tin_lstm_units, n_timesteps)
+        model_2 = lstmn.baseline_model(sml_lstm_units, n_timesteps)
+        model_3 = lstmn.baseline_model(med_lstm_units, n_timesteps)
+        model_4 = lstmn.baseline_model(lrg_lstm_units, n_timesteps)
+        model_5 = lstmn.baseline_model(hug_lstm_units, n_timesteps)
+
+        print('Tiny Model', sml_lstm_units, 'units')
+        print("X_train:", X_1_train.shape)
+        model_1.fit(X_1_train, y_1_train,
+                    validation_data=(X_1_val, y_1_val),
+                    epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
 
         print('Small Model', sml_lstm_units, 'units')
-        model_s.fit(X_s_train,
-                    y_s_train,
-                    validation_data=(X_s_val, y_s_val),
-                    epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
-        print('Medium Model', med_lstm_units, 'units')
-        model_m.fit(X_m_train,
-                    y_m_train,
-                    validation_data=(X_m_val, y_m_val),
-                    epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
-        print('Large Model', lrg_lstm_units, 'units')
-        model_l.fit(X_l_train,
-                    y_l_train,
-                    validation_data=(X_l_val, y_l_val),
+        print("X_train:", X_2_train.shape)
+        model_2.fit(X_2_train, y_2_train,
+                    validation_data=(X_2_val, y_2_val),
                     epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
 
-        model_s_pred = model_s.predict(X_test, batch_size=lstmn.BATCH_SIZE)
-        model_m_pred = model_m.predict(X_test, batch_size=lstmn.BATCH_SIZE)
-        model_l_pred = model_l.predict(X_test, batch_size=lstmn.BATCH_SIZE)
+        print('Medium Model', med_lstm_units, 'units')
+        print("X_train:", X_3_train.shape)
+        model_3.fit(X_3_train, y_3_train,
+                    validation_data=(X_3_val, y_3_val),
+                    epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
+
+        print('Large Model', lrg_lstm_units, 'units')
+        print("X_train:", X_4_train.shape)
+        model_4.fit(X_4_train, y_4_train,
+                    validation_data=(X_4_val, y_4_val),
+                    epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
+
+        print('Large Model', lrg_lstm_units, 'units')
+        print("X_train:", X_5_train.shape)
+        model_5.fit(X_5_train, y_5_train,
+                    validation_data=(X_5_val, y_5_val),
+                    epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
+
+        model_1_pred = model_1.predict(X_1_test, batch_size=lstmn.BATCH_SIZE)
+        model_2_pred = model_2.predict(X_2_test, batch_size=lstmn.BATCH_SIZE)
+        model_3_pred = model_3.predict(X_3_test, batch_size=lstmn.BATCH_SIZE)
+        model_4_pred = model_4.predict(X_4_test, batch_size=lstmn.BATCH_SIZE)
+        model_5_pred = model_5.predict(X_5_test, batch_size=lstmn.BATCH_SIZE)
 
         # classify output predictions
         if lstmn.NUM_CLASS == 2:
-            model_s_pred = (model_s_pred > 0.5)
-            model_m_pred = (model_m_pred > 0.5)
-            model_l_pred = (model_l_pred > 0.5)
+            model_1_pred = (model_1_pred > 0.5)
+            model_2_pred = (model_2_pred > 0.5)
+            model_3_pred = (model_3_pred > 0.5)
+            model_4_pred = (model_4_pred > 0.5)
+            model_5_pred = (model_5_pred > 0.5)
         elif lstmn.NUM_CLASS == 4:
+            # Tiny Prediction
+            y_ohe = model_1_pred
+            model_1_pred = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                model_1_pred.append(mx_i)
             # Small Prediction
-            y_ohe = model_s_pred
-            model_s_pred = []
+            y_ohe = model_2_pred
+            model_2_pred = []
             for y in y_ohe:
                 mx = 0
                 mx_i = None
@@ -153,10 +210,10 @@ if __name__ == "__main__":
                     if y[i] > mx:
                         mx_i = i
                         mx = y[i]
-                model_s_pred.append(mx_i)
+                model_2_pred.append(mx_i)
             # Medium Prediction
-            y_ohe = model_m_pred
-            model_m_pred = []
+            y_ohe = model_3_pred
+            model_3_pred = []
             for y in y_ohe:
                 mx = 0
                 mx_i = None
@@ -164,10 +221,10 @@ if __name__ == "__main__":
                     if y[i] > mx:
                         mx_i = i
                         mx = y[i]
-                model_m_pred.append(mx_i)
+                model_3_pred.append(mx_i)
             # Large Prediction
-            y_ohe = model_l_pred
-            model_l_pred = []
+            y_ohe = model_4_pred
+            model_4_pred = []
             for y in y_ohe:
                 mx = 0
                 mx_i = None
@@ -175,7 +232,18 @@ if __name__ == "__main__":
                     if y[i] > mx:
                         mx_i = i
                         mx = y[i]
-                model_l_pred.append(mx_i)
+                model_4_pred.append(mx_i)
+            # Huge Prediction
+            y_ohe = model_5_pred
+            model_5_pred = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                model_5_pred.append(mx_i)
             # Actual
             y_ohe = y_test
             y_test = []
@@ -188,17 +256,23 @@ if __name__ == "__main__":
                         mx = y[i]
                 y_test.append(mx_i)
 
-        print("y_test:      ", y_test)
-        print("model_s_pred:", model_s_pred)
-        print("model_m_pred:", model_m_pred)
-        print("model_l_pred:", model_l_pred)
+        print("y_test:     ", y_test)
+        print("Tiny   pred:", model_1_pred)
+        print("Small  pred:", model_2_pred)
+        print("Medium pred:", model_3_pred)
+        print("Large  pred:", model_4_pred)
+        print("Huge   pred:", model_5_pred)
 
         final_pred = np.array([])
         for i in range(0, len(X_test)):
-            max_vote = mode([model_s_pred[i], model_m_pred[i], model_l_pred[i]])
+            max_vote = mode([model_1_pred[i],
+                             model_2_pred[i],
+                             model_3_pred[i],
+                             model_4_pred[i],
+                             model_5_pred[i]])
             final_pred = np.append(final_pred, max_vote[0])
 
-        print("final_pred:  ", final_pred)
+        print("final_pred: ", final_pred)
 
         # confusion matrix
         cm = confusion_matrix(y_test, final_pred)
