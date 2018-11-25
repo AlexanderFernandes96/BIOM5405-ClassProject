@@ -24,8 +24,14 @@ import matplotlib.pyplot as plt
 # seed = 7
 # np.random.seed(seed)
 
-# Class Labels
-NUM_CLASS = 4
+# Project Parameters
+NUM_CLASS = 4 # Change to two for Healthy vs Diseased binary classification
+NUM_FEATURES = 6
+NUM_TIME_SERIES = 90000
+NUM_LSTM_CELLS = 32
+NUM_EPOCH = 20
+BATCH_SIZE = 32
+
 
 if NUM_CLASS == 4:
     LABEL_CTRL = 0
@@ -56,11 +62,11 @@ def load_data(folder):
             y.append(LABEL_PARK)
 
     # Time series data, (only using leg 0 for the time being)
-    X = np.empty([len(y), 90000, 2], float)
+    X = np.empty([len(y), NUM_TIME_SERIES, NUM_FEATURES], float)
 
     for i in range(len(file_list)):
         if any(x in file_list[i] for x in ['als', 'control', 'hunt', 'park']):
-            data = genfromtxt(folder + file_list[i], delimiter='\t')
+            data = genfromtxt(folder + file_list[i], delimiter=',')
             X[i] = data
 
     return X, np.asarray(y)
@@ -107,7 +113,7 @@ if __name__ == "__main__":
     project_folder = '/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/'
     # project_folder = 'D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/'
 
-    X_total, y_total = load_data(project_folder + 'train/')
+    X_total, y_total = load_data(project_folder + 'data/')
 
     print('X_total =', X_total.shape)
 
@@ -123,14 +129,19 @@ if __name__ == "__main__":
     print("Number Classes:", n_outputs)
 
     # The model will be designed in the following manner:
-    # CNN 1D -> Pooling -> LSTMN -> 1 sigmoid Dense Layer
+    # CNN 1D -> Pooling -> LSTM Master -> LSTM Support -> 1 sigmoid Dense Layer
 
     # define 5-fold cross validation test harness
     kfold = StratifiedKFold(n_splits=5, shuffle=True)
     cvscores = []
     cm_sum = None
 
+    fold_number = 1
+
     for train_index, test_index in kfold.split(X_total, y_total):
+
+        print("CV Fold #%d" % fold_number)
+        fold_number += 1
 
         X_train, X_test = X_total[train_index], X_total[test_index]
         y_train, y_test = y_total[train_index], y_total[test_index]
@@ -144,7 +155,7 @@ if __name__ == "__main__":
         model = Sequential()
 
         # Input: CNN 1D
-        model.add(Conv1D(filters=32,
+        model.add(Conv1D(filters=8,
                          kernel_size=3,
                          padding='same',
                          activation='relu',
@@ -154,8 +165,14 @@ if __name__ == "__main__":
         model.add(MaxPooling1D(pool_size=2))
 
         # LSTM Layer
-        num_LSTM_cells = 10
-        model.add(LSTM(num_LSTM_cells, dropout=0.2, recurrent_dropout=0.2))
+        model.add(LSTM(NUM_LSTM_CELLS,
+                       dropout=0.1,
+                       recurrent_dropout=0.1,
+                       return_sequences=True))
+
+        model.add(LSTM(NUM_FEATURES,
+                       dropout=0.05,
+                       recurrent_dropout=0.05))
 
         # Output: Dense Layer Classifier
         # compile and fit our model
@@ -167,14 +184,18 @@ if __name__ == "__main__":
             model.add(Dense(n_outputs, activation='softmax'))
             model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
 
-        model.fit(X_train, y_train, validation_split=0.2, epochs=6, batch_size=64, verbose=2)
+        model.fit(X_train, y_train,
+                  validation_split=0.2,
+                  epochs=NUM_EPOCH,
+                  batch_size=BATCH_SIZE,
+                  verbose=2)
 
         # evaluate model
         scores = model.evaluate(X_test, y_test, verbose=2)
         print("%s: %.2f%%" % (model.metrics_names[1], scores[1] * 100))
         cvscores.append(scores[1]*100)
 
-        y_pred = model.predict(X_test, batch_size=64)
+        y_pred = model.predict(X_test, batch_size=BATCH_SIZE)
 
         # classify output prediction
         if NUM_CLASS == 2:
