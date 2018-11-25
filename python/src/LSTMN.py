@@ -7,43 +7,57 @@ import time
 import itertools
 from os import listdir
 from os.path import isfile, join
+
 from numpy import genfromtxt
 import numpy as np
 from keras.models import Sequential
 from keras.layers import Dense
 from keras.layers import LSTM
+from keras.wrappers.scikit_learn import KerasRegressor
 from keras.layers.convolutional import Conv1D
 from keras.layers.convolutional import MaxPooling1D
 from keras.utils import to_categorical
+from sklearn.ensemble import AdaBoostClassifier
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import cross_val_score
 import matplotlib.pyplot as plt
-
 
 # fix random seed for reproducibility
 # seed = 7
 # np.random.seed(seed)
 
-# Project Parameters
-NUM_CLASS = 4 # Change to two for Healthy vs Diseased binary classification
+# Data Parameters
+NUM_CLASS = 4  # Change to two for Healthy vs Diseased binary classification
 NUM_FEATURES = 6
 NUM_TIME_SERIES = 90000
-NUM_LSTM_CELLS = 32
-NUM_EPOCH = 20
-BATCH_SIZE = 32
+NUM_TS_CROP = 10000  # time series data cropped by NUM_TS_CROP/2 on start and end
 
+# Split Parameters
+NUM_K_SPLIT = 5  # number k fold to split into training and test
+VAL_SPLIT = 0.3  # validation set split from split training set (randomized for each k fold cross validation)
+
+# Run Parameters
+NUM_LSTM_CELLS = 50
+NUM_EPOCH = 15
+BATCH_SIZE = 20
 
 if NUM_CLASS == 4:
     LABEL_CTRL = 0
     LABEL_ALS = 1
     LABEL_HUNT = 2
     LABEL_PARK = 3
+    n_outputs = 4
     class_names = ['Control', 'ALS', 'Hunting', 'Parkingson']
 else:
     LABEL_CTRL = 0
     LABEL_ALS = 1
     LABEL_HUNT = 1
     LABEL_PARK = 1
+    n_outputs = 1
+    class_names = ['Healthy', 'Diseased']
+
 
 def load_data(folder):
     file_list = [f for f in listdir(folder) if isfile(join(folder, f))]
@@ -51,25 +65,83 @@ def load_data(folder):
     # Labels for time series data
     y = []
 
+    X_file_list = []
+
+    print('Loading: label | file')
     for file_name in file_list:
         if 'als' in file_name:
             y.append(LABEL_ALS)
+            X_file_list.append(file_name)
+            print(LABEL_ALS, end='')
         elif 'control' in file_name:
             y.append(LABEL_CTRL)
+            X_file_list.append(file_name)
+            print(LABEL_CTRL, end='')
         elif 'hunt' in file_name:
             y.append(LABEL_HUNT)
+            X_file_list.append(file_name)
+            print(LABEL_HUNT, end='')
         elif 'park' in file_name:
             y.append(LABEL_PARK)
+            X_file_list.append(file_name)
+            print(LABEL_PARK, end='')
+        else:
+            print('~', end='')
+        print(' |', file_name)
 
     # Time series data, (only using leg 0 for the time being)
     X = np.empty([len(y), NUM_TIME_SERIES, NUM_FEATURES], float)
 
-    for i in range(len(file_list)):
-        if any(x in file_list[i] for x in ['als', 'control', 'hunt', 'park']):
-            data = genfromtxt(folder + file_list[i], delimiter=',')
-            X[i] = data
+    for f_i in range(len(X_file_list)):
+        if any(x in file_list[f_i] for x in ['als', 'control', 'hunt', 'park']):
+            data = genfromtxt(folder + file_list[f_i], delimiter=',')
+            X[f_i] = data
 
-    return X, np.asarray(y)
+    # Crop time series data
+    X_crop = X[:, int(NUM_TS_CROP / 2):int(NUM_TIME_SERIES - NUM_TS_CROP / 2), :]
+
+    return X_crop, np.asarray(y)
+
+
+def baseline_model(num_lstm_cells=NUM_LSTM_CELLS):
+    # The model will be designed in the following manner:
+    # LSTM -> 1 sigmoid Dense Layer
+
+    # initialize a sequential keras model
+    model = Sequential()
+
+    # # Input: CNN 1D
+    # model.add(Conv1D(filters=8,
+    #                  kernel_size=3,
+    #                  padding='same',
+    #                  activation='relu',
+    #                  input_shape=(NUM_TIME_SERIES-NUM_TS_CROP, NUM_FEATURES)))
+    #
+    # # Pooling
+    # model.add(MaxPooling1D(pool_size=2))
+
+    # LSTM Master Layer
+    model.add(LSTM(num_lstm_cells,
+                   dropout=0.1,
+                   recurrent_dropout=0.1,
+                   # return_sequences=True,
+                   input_shape=(NUM_TIME_SERIES - NUM_TS_CROP, NUM_FEATURES)))
+
+    # LSTM Support Layer
+    # model.add(LSTM(NUM_FEATURES))
+
+    # Output: Dense Layer Classifier
+    # compile and fit our model
+    if NUM_CLASS == 2:
+        model.add(Dense(n_outputs, activation='sigmoid'))
+        model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    elif NUM_CLASS == 4:
+        model.add(Dense(n_outputs, activation='softmax'))
+        model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    return model
+
 
 def plot_confusion_matrix(cm, classes,
                           normalize=False,
@@ -105,6 +177,7 @@ def plot_confusion_matrix(cm, classes,
     plt.xlabel('Predicted label')
     plt.tight_layout()
 
+
 # Run the following script using the following command via "python -m LSTMN.py"
 if __name__ == "__main__":
     # Time Start
@@ -116,23 +189,17 @@ if __name__ == "__main__":
     X_total, y_total = load_data(project_folder + 'data/')
 
     print('X_total =', X_total.shape)
+    print('y_total = ', y_total.tolist())
 
     n_timesteps = X_total.shape[1]
     n_features = X_total.shape[2]
-    if LABEL_ALS == LABEL_HUNT == LABEL_PARK:
-        # Health vs Diseased
-        n_outputs = 1
-    else:
-        # Classify Disease Type
-        n_outputs = 4
 
     print("Number Classes:", n_outputs)
-
-    # The model will be designed in the following manner:
-    # CNN 1D -> Pooling -> LSTM Master -> LSTM Support -> 1 sigmoid Dense Layer
+    print("Cropped Time Series Length:", n_timesteps)
+    print("Number Features:", NUM_FEATURES)
 
     # define 5-fold cross validation test harness
-    kfold = StratifiedKFold(n_splits=5, shuffle=True)
+    kfold = StratifiedKFold(n_splits=NUM_K_SPLIT, shuffle=True)
     cvscores = []
     cm_sum = None
 
@@ -140,64 +207,37 @@ if __name__ == "__main__":
 
     for train_index, test_index in kfold.split(X_total, y_total):
 
-        print("CV Fold #%d" % fold_number)
+        print("CV Fold %d/%d" % (fold_number, NUM_K_SPLIT))
         fold_number += 1
 
         X_train, X_test = X_total[train_index], X_total[test_index]
         y_train, y_test = y_total[train_index], y_total[test_index]
 
-        y_train = to_categorical(y_train, num_classes=n_outputs)
-        y_test = to_categorical(y_test, num_classes=n_outputs)
+        if NUM_CLASS == 4:
+            y_train = to_categorical(y_train, num_classes=n_outputs)
+            y_test = to_categorical(y_test, num_classes=n_outputs)
 
-        print("TRAIN:", train_index, "TEST:", test_index)
+        print("TRAIN/VAL:", len(train_index), train_index.tolist())
+        print("TEST:", len(test_index), test_index.tolist())
 
-        # initialize a sequential keras model
-        model = Sequential()
+        # Split validation set from the training set
+        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=VAL_SPLIT)
 
-        # Input: CNN 1D
-        model.add(Conv1D(filters=8,
-                         kernel_size=3,
-                         padding='same',
-                         activation='relu',
-                         input_shape=(n_timesteps, n_features)))
-
-        # Pooling
-        model.add(MaxPooling1D(pool_size=2))
-
-        # LSTM Layer
-        model.add(LSTM(NUM_LSTM_CELLS,
-                       dropout=0.1,
-                       recurrent_dropout=0.1,
-                       return_sequences=True))
-
-        model.add(LSTM(NUM_FEATURES,
-                       dropout=0.05,
-                       recurrent_dropout=0.05))
-
-        # Output: Dense Layer Classifier
-        # compile and fit our model
-        if NUM_CLASS == 2:
-            model.add(Dense(n_outputs, activation='sigmoid'))
-            model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-
-        elif NUM_CLASS == 4:
-            model.add(Dense(n_outputs, activation='softmax'))
-            model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
-
+        model = baseline_model()
         model.fit(X_train, y_train,
-                  validation_split=0.2,
+                  validation_data=(X_val, y_val),
                   epochs=NUM_EPOCH,
                   batch_size=BATCH_SIZE,
                   verbose=2)
-
-        # evaluate model
         scores = model.evaluate(X_test, y_test, verbose=2)
         print("%s: %.2f%%" % (model.metrics_names[1], scores[1] * 100))
-        cvscores.append(scores[1]*100)
-
+        cvscores.append(scores)
         y_pred = model.predict(X_test, batch_size=BATCH_SIZE)
 
-        # classify output prediction
+        print("y_test:", y_test)
+        print("y_pred:", y_pred)
+
+        # classify output predictions
         if NUM_CLASS == 2:
             y_pred = (y_pred > 0.5)
         elif NUM_CLASS == 4:
@@ -244,10 +284,3 @@ if __name__ == "__main__":
     print("Elapsed Time: {:0>2}:{:0>2}:{:05.2f}".format(int(hours), int(minutes), seconds))
 
     plt.show()
-
-
-
-
-
-
-
