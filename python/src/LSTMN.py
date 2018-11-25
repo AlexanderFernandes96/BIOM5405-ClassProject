@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 
 # Data Parameters
 NUM_CLASS = 4  # Change to two for Healthy vs Diseased binary classification
-NUM_FEATURES = 6
+NUM_FEATURES = 14
 NUM_TIME_SERIES = 90000
 NUM_TS_CROP = 10000  # time series data cropped by NUM_TS_CROP/2 on start and end
 
