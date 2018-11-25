@@ -1,0 +1,389 @@
+"""Meta Learning Strategy"""
+from keras.utils import to_categorical
+from scipy.stats import mode
+from sklearn.metrics import confusion_matrix
+from sklearn.model_selection import StratifiedKFold, train_test_split
+
+import os
+import python.src.LSTMN as lstmn
+import time
+import numpy as np
+import matplotlib.pyplot as plt
+import random
+
+# Disable tensorflow warning messages
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+# Run the following script using the following command via "python -m ML.py"
+if __name__ == "__main__":
+    # Time Start
+    start_time = time.time()
+
+    project_folder = '/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/'
+    # project_folder = 'D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/'
+
+    # Meta Learning Classifier Parameters
+    sml_lstm_units = 10
+    med_lstm_units = 50
+    lrg_lstm_units = 100
+
+    # LSTMN Parameters:
+    lstmn.NUM_CLASS = 4  # Change to two for Healthy vs Diseased binary classification
+    lstmn.NUM_EPOCH = 15
+    lstmn.BATCH_SIZE = 10
+
+    if lstmn.NUM_CLASS == 4:
+        lstmn.LABEL_CTRL = 0
+        lstmn.LABEL_ALS = 1
+        lstmn.LABEL_HUNT = 2
+        lstmn.LABEL_PARK = 3
+        lstmn.n_outputs = 4
+        class_names = ['Control', 'ALS', 'Hunting', 'Parkingson']
+    else:
+        lstmn.LABEL_CTRL = 0
+        lstmn.LABEL_ALS = 1
+        lstmn.LABEL_HUNT = 1
+        lstmn.LABEL_PARK = 1
+        lstmn.n_outputs = 1
+        class_names = ['Healthy', 'Diseased']
+
+    # Load Data
+    X_total, y_total = lstmn.load_data(project_folder + 'data/')
+
+    print('X_total =', X_total.shape)
+    print('y_total = ', y_total.tolist())
+
+    n_timesteps = X_total.shape[1]
+    n_features = X_total.shape[2]
+    if lstmn.LABEL_ALS == lstmn.LABEL_HUNT == lstmn.LABEL_PARK:
+        # Health vs Diseased
+        n_outputs = 1
+    else:
+        # Classify Disease Type
+        n_outputs = 4
+
+    print("Number Classes:", n_outputs)
+    print("Cropped Time Series Length:", n_timesteps)
+    print("Number Features:", lstmn.NUM_FEATURES)
+
+    # define 5-fold cross validation test harness
+    kfold = StratifiedKFold(n_splits=lstmn.NUM_K_SPLIT, shuffle=True)
+    cvscores = []
+    cm_sum = None
+
+    fold_number = 1
+    for train_index, test_index in kfold.split(X_total, y_total):
+
+        print("\nCV Fold %d/%d" % (fold_number, lstmn.NUM_K_SPLIT))
+        fold_number += 1
+
+        X_train, X_test = X_total[train_index], X_total[test_index]
+        y_train, y_test = y_total[train_index], y_total[test_index]
+
+        if lstmn.NUM_CLASS == 4:
+            y_train = to_categorical(y_train, num_classes=n_outputs)
+            y_test = to_categorical(y_test, num_classes=n_outputs)
+
+        print("TRAIN/VAL:", len(train_index), train_index.tolist())
+        print("TEST:", len(test_index), test_index.tolist())
+
+        # Bootstrap new data for each classifier
+        X_s_train = X_train;
+        y_s_train = y_train
+        X_m_train = X_train;
+        y_m_train = y_train
+        X_l_train = X_train;
+        y_l_train = y_train
+        for i in range(0, len(X_train)):
+            s = random.randint(0, len(X_train) - 1)
+            X_s_train[i] = X_train[s]
+            y_s_train[i] = y_train[s]
+
+            m = random.randint(0, len(X_train) - 1)
+            X_m_train[i] = X_train[m]
+            y_m_train[i] = y_train[m]
+
+            l = random.randint(0, len(X_train) - 1)
+            X_l_train[i] = X_train[l]
+            y_l_train[i] = y_train[l]
+
+        # Split validation set from the training set
+        X_s_train, X_s_val, y_s_train, y_s_val = train_test_split(X_s_train, y_s_train, test_size=lstmn.VAL_SPLIT)
+        X_m_train, X_m_val, y_m_train, y_m_val = train_test_split(X_m_train, y_m_train, test_size=lstmn.VAL_SPLIT)
+        X_l_train, X_l_val, y_l_train, y_l_val = train_test_split(X_l_train, y_l_train, test_size=lstmn.VAL_SPLIT)
+
+        # Classifiers: Small, Medium, Large lstmn models
+        model_s = lstmn.baseline_model(sml_lstm_units)
+        model_m = lstmn.baseline_model(med_lstm_units)
+        model_l = lstmn.baseline_model(lrg_lstm_units)
+
+        print('Small Model', sml_lstm_units, 'units')
+        model_s.fit(X_s_train,
+                    y_s_train,
+                    validation_data=(X_s_val, y_s_val),
+                    epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
+        print('Medium Model', med_lstm_units, 'units')
+        model_m.fit(X_m_train,
+                    y_m_train,
+                    validation_data=(X_m_val, y_m_val),
+                    epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
+        print('Large Model', lrg_lstm_units, 'units')
+        model_l.fit(X_l_train,
+                    y_l_train,
+                    validation_data=(X_l_val, y_l_val),
+                    epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
+
+        model_s_pred = model_s.predict(X_test, batch_size=lstmn.BATCH_SIZE)
+        model_m_pred = model_m.predict(X_test, batch_size=lstmn.BATCH_SIZE)
+        model_l_pred = model_l.predict(X_test, batch_size=lstmn.BATCH_SIZE)
+
+        # classify output predictions
+        if lstmn.NUM_CLASS == 2:
+            model_s_pred = (model_s_pred > 0.5)
+            model_m_pred = (model_m_pred > 0.5)
+            model_l_pred = (model_l_pred > 0.5)
+        elif lstmn.NUM_CLASS == 4:
+            # Small Prediction
+            y_ohe = model_s_pred
+            model_s_pred = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                model_s_pred.append(mx_i)
+            # Medium Prediction
+            y_ohe = model_m_pred
+            model_m_pred = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                model_m_pred.append(mx_i)
+            # Large Prediction
+            y_ohe = model_l_pred
+            model_l_pred = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                model_l_pred.append(mx_i)
+            # Actual
+            y_ohe = y_test
+            y_test = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                y_test.append(mx_i)
+
+        print("y_test:      ", y_test)
+        print("model_s_pred:", model_s_pred)
+        print("model_m_pred:", model_m_pred)
+        print("model_l_pred:", model_l_pred)
+
+        final_pred = np.array([])
+        for i in range(0, len(X_test)):
+            max_vote = mode([model_s_pred[i], model_m_pred[i], model_l_pred[i]])
+            final_pred = np.append(final_pred, max_vote[0])
+
+        print("final_pred:  ", final_pred)
+
+        # confusion matrix
+        cm = confusion_matrix(y_test, final_pred)
+        if cm_sum is None:
+            cm_sum = cm
+        else:
+            cm_sum += cm
+
+        score = 0
+        sum = 0
+        for r in range(cm.shape[0]):
+            for c in range(cm.shape[1]):
+                sum += cm[r, c]
+                if r == c:
+                    score += cm[r, c]
+        score = score * 100 / sum
+        print("score: %.2f%%" % score)
+        cvscores.append(score)
+
+    print("\nCross Fold Classification Accuracy:\n%.2f%% (+/- %.2f%%)" % (np.mean(cvscores), np.std(cvscores)))
+
+    # Plot non-normalized confusion matrix
+    plt.figure()
+    lstmn.plot_confusion_matrix(cm_sum, classes=class_names, title='Confusion matrix, without normalization')
+
+    # Time End
+    elapsed_time = time.time()
+    hours, rem = divmod(elapsed_time - start_time, 3600)
+    minutes, seconds = divmod(rem, 60)
+    print("Elapsed Time: {:0>2}:{:0>2}:{:05.2f}".format(int(hours), int(minutes), seconds))
+
+    plt.show()
+
+#########################################################################################################################
+
+
+
+/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/venv/bin/python3.5 /media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/python/src/ML.py
+Using TensorFlow backend.
+Loading: label | file
+1 | als1.tsv
+1 | als2.tsv
+1 | als3.tsv
+1 | als4.tsv
+1 | als5.tsv
+1 | als6.tsv
+1 | als7.tsv
+1 | als8.tsv
+0 | control14.tsv
+0 | control15.tsv
+0 | control16.tsv
+0 | control2.tsv
+0 | control3.tsv
+0 | control4.tsv
+0 | control5.tsv
+0 | control6.tsv
+0 | control7.tsv
+0 | control8.tsv
+~ | file_index.txt
+2 | hunt1.tsv
+2 | hunt14.tsv
+2 | hunt15.tsv
+2 | hunt16.tsv
+2 | hunt17.tsv
+2 | hunt18.tsv
+3 | park14.tsv
+3 | park15.tsv
+3 | park2.tsv
+3 | park3.tsv
+3 | park4.tsv
+3 | park5.tsv
+3 | park6.tsv
+3 | park7.tsv
+3 | park8.tsv
+0 | control1.tsv
+2 | hunt19.tsv
+3 | park1.tsv
+2 | hunt2.tsv
+2 | hunt20.tsv
+2 | hunt3.tsv
+2 | hunt4.tsv
+2 | hunt5.tsv
+2 | hunt6.tsv
+2 | hunt7.tsv
+2 | hunt8.tsv
+X_total = (44, 80000, 6)
+y_total =  [1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2]
+Number Classes: 4
+Cropped Time Series Length: 80000
+Number Features: 6
+
+CV Fold 1/5
+TRAIN/VAL: 34 [0, 1, 2, 3, 4, 5, 8, 10, 12, 13, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 39, 40, 41, 43]
+TEST: 10 [6, 7, 9, 11, 14, 21, 26, 31, 38, 42]
+Small Model 10 units
+Train on 23 samples, validate on 11 samples
+Epoch 1/15
+ - 102s - loss: 1.3113 - acc: 0.4783 - val_loss: 1.2654 - val_acc: 0.5455
+Epoch 2/15
+ - 100s - loss: 1.3025 - acc: 0.5217 - val_loss: 1.2604 - val_acc: 0.5455
+Epoch 3/15
+ - 102s - loss: 1.2837 - acc: 0.5217 - val_loss: 1.2555 - val_acc: 0.5455
+Epoch 4/15
+ - 98s - loss: 1.2691 - acc: 0.5217 - val_loss: 1.2506 - val_acc: 0.5455
+Epoch 5/15
+ - 98s - loss: 1.2755 - acc: 0.5217 - val_loss: 1.2462 - val_acc: 0.5455
+Epoch 6/15
+ - 97s - loss: 1.2515 - acc: 0.5217 - val_loss: 1.2421 - val_acc: 0.5455
+Epoch 7/15
+ - 98s - loss: 1.2478 - acc: 0.5217 - val_loss: 1.2382 - val_acc: 0.5455
+Epoch 8/15
+ - 98s - loss: 1.2248 - acc: 0.5217 - val_loss: 1.2352 - val_acc: 0.5455
+Epoch 9/15
+ - 97s - loss: 1.2211 - acc: 0.5217 - val_loss: 1.2328 - val_acc: 0.5455
+Epoch 10/15
+ - 97s - loss: 1.1967 - acc: 0.5217 - val_loss: 1.2301 - val_acc: 0.5455
+Epoch 11/15
+ - 98s - loss: 1.1912 - acc: 0.5217 - val_loss: 1.2280 - val_acc: 0.5455
+Epoch 12/15
+ - 97s - loss: 1.1863 - acc: 0.5217 - val_loss: 1.2258 - val_acc: 0.5455
+Epoch 13/15
+ - 98s - loss: 1.1766 - acc: 0.5217 - val_loss: 1.2245 - val_acc: 0.5455
+Epoch 14/15
+ - 97s - loss: 1.1627 - acc: 0.5217 - val_loss: 1.2231 - val_acc: 0.5455
+Epoch 15/15
+ - 97s - loss: 1.1542 - acc: 0.5217 - val_loss: 1.2213 - val_acc: 0.5455
+Medium Model 50 units
+Train on 23 samples, validate on 11 samples
+Epoch 1/15
+ - 99s - loss: 1.3653 - acc: 0.2174 - val_loss: 1.3451 - val_acc: 0.2727
+Epoch 2/15
+ - 98s - loss: 1.3233 - acc: 0.3913 - val_loss: 1.3042 - val_acc: 0.2727
+Epoch 3/15
+ - 99s - loss: 1.2924 - acc: 0.3913 - val_loss: 1.2587 - val_acc: 0.2727
+Epoch 4/15
+ - 99s - loss: 1.1988 - acc: 0.5652 - val_loss: 1.2197 - val_acc: 0.5455
+Epoch 5/15
+ - 99s - loss: 1.1697 - acc: 0.4783 - val_loss: 1.1850 - val_acc: 0.5455
+Epoch 6/15
+ - 98s - loss: 1.1368 - acc: 0.4348 - val_loss: 1.1602 - val_acc: 0.5455
+Epoch 7/15
+ - 99s - loss: 1.1324 - acc: 0.4783 - val_loss: 1.1519 - val_acc: 0.5455
+Epoch 8/15
+ - 97s - loss: 1.0669 - acc: 0.5217 - val_loss: 1.1618 - val_acc: 0.5455
+Epoch 9/15
+ - 98s - loss: 1.0915 - acc: 0.5217 - val_loss: 1.1682 - val_acc: 0.5455
+Epoch 10/15
+ - 98s - loss: 1.1060 - acc: 0.4783 - val_loss: 1.1698 - val_acc: 0.5455
+Epoch 11/15
+ - 98s - loss: 1.0422 - acc: 0.4783 - val_loss: 1.1768 - val_acc: 0.5455
+Epoch 12/15
+ - 98s - loss: 1.0698 - acc: 0.5652 - val_loss: 1.1745 - val_acc: 0.5455
+Epoch 13/15
+ - 98s - loss: 0.9951 - acc: 0.5652 - val_loss: 1.1736 - val_acc: 0.5455
+Epoch 14/15
+ - 98s - loss: 1.0646 - acc: 0.5217 - val_loss: 1.1682 - val_acc: 0.5455
+Epoch 15/15
+ - 99s - loss: 1.0416 - acc: 0.4783 - val_loss: 1.1604 - val_acc: 0.5455
+Large Model 100 units
+Train on 23 samples, validate on 11 samples
+Epoch 1/15
+ - 107s - loss: 1.3498 - acc: 0.4783 - val_loss: 1.3079 - val_acc: 0.0909
+Epoch 2/15
+ - 106s - loss: 1.2808 - acc: 0.4783 - val_loss: 1.3033 - val_acc: 0.0909
+Epoch 3/15
+ - 107s - loss: 1.2369 - acc: 0.4783 - val_loss: 1.3035 - val_acc: 0.0909
+Epoch 4/15
+ - 107s - loss: 1.2052 - acc: 0.4783 - val_loss: 1.3219 - val_acc: 0.0909
+Epoch 5/15
+ - 107s - loss: 1.1731 - acc: 0.4783 - val_loss: 1.2495 - val_acc: 0.0909
+Epoch 6/15
+ - 107s - loss: 1.1679 - acc: 0.4783 - val_loss: 1.1868 - val_acc: 0.0909
+Epoch 7/15
+ - 108s - loss: 1.1699 - acc: 0.4783 - val_loss: 1.1304 - val_acc: 0.0909
+Epoch 8/15
+ - 107s - loss: 1.1206 - acc: 0.4783 - val_loss: 0.9984 - val_acc: 0.0909
+Epoch 9/15
+ - 108s - loss: 1.0569 - acc: 0.3913 - val_loss: 0.9185 - val_acc: 0.6364
+Epoch 10/15
+ - 108s - loss: 1.1256 - acc: 0.4348 - val_loss: 1.0693 - val_acc: 0.0909
+Epoch 11/15
+ - 107s - loss: 1.0836 - acc: 0.5217 - val_loss: 1.1071 - val_acc: 0.0909
+Epoch 12/15
+ - 108s - loss: 1.0939 - acc: 0.5652 - val_loss: 1.0329 - val_acc: 0.6364
+Epoch 13/15
+ - 107s - loss: 1.0006 - acc: 0.5217 - val_loss: 0.7693 - val_acc: 0.9091
+Epoch 14/15
+ - 108s - loss: 1.2137 - acc: 0.56
