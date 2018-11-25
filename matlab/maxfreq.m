@@ -1,7 +1,7 @@
 function [maxF] = maxfreq( ts)
     maxF = zeros(1,90000);
     ts = ts - mean(ts);
-    w = 100;
+    w = 200;
     Fs = 300;
     for i = 1 : 90000 - w
         Y = fft(ts(i : i+w));
