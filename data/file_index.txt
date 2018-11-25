@@ -1,44 +1,44 @@
-als1.tsv
-als2.tsv
-als3.tsv
-als4.tsv
-als5.tsv
-als6.tsv
-als7.tsv
-als8.tsv
-control1.tsv
-control2.tsv
-control3.tsv
-control4.tsv
-control5.tsv
-control6.tsv
-control7.tsv
-control8.tsv
-control14.tsv
-control15.tsv
-control16.tsv
-hunt1.tsv
-hunt2.tsv
-hunt3.tsv
-hunt4.tsv
-hunt5.tsv
-hunt6.tsv
-hunt7.tsv
-hunt8.tsv
-hunt14.tsv
-hunt15.tsv
-hunt16.tsv
-hunt17.tsv
-hunt18.tsv
-hunt19.tsv
-hunt20.tsv
-park1.tsv
-park2.tsv
-park3.tsv
-park4.tsv
-park5.tsv
-park6.tsv
-park7.tsv
-park8.tsv
-park14.tsv
-park15.tsv
+ 0: 1 | 1 | als1.tsv
+ 1: 1 | 1 | als2.tsv
+ 2: 1 | 1 | als3.tsv
+ 3: 1 | 1 | als4.tsv
+ 4: 1 | 1 | als5.tsv
+ 5: 1 | 1 | als6.tsv
+ 6: 1 | 1 | als7.tsv
+ 7: 1 | 1 | als8.tsv
+ 8: 0 | 0 | control14.tsv
+ 9: 0 | 0 | control15.tsv
+10: 0 | 0 | control16.tsv
+11: 0 | 0 | control2.tsv
+12: 0 | 0 | control3.tsv
+13: 0 | 0 | control4.tsv
+14: 0 | 0 | control5.tsv
+15: 0 | 0 | control6.tsv
+16: 0 | 0 | control7.tsv
+17: 0 | 0 | control8.tsv
+18: 1 | 2 | hunt1.tsv
+19: 1 | 2 | hunt14.tsv
+20: 1 | 2 | hunt15.tsv
+21: 1 | 2 | hunt16.tsv
+22: 1 | 2 | hunt17.tsv
+23: 1 | 2 | hunt18.tsv
+24: 1 | 3 | park14.tsv
+25: 1 | 3 | park15.tsv
+26: 1 | 3 | park2.tsv
+27: 1 | 3 | park3.tsv
+28: 1 | 3 | park4.tsv
+29: 1 | 3 | park5.tsv
+30: 1 | 3 | park6.tsv
+31: 1 | 3 | park7.tsv
+32: 1 | 3 | park8.tsv
+33: 0 | 0 | control1.tsv
+34: 1 | 2 | hunt19.tsv
+35: 1 | 3 | park1.tsv
+36: 1 | 2 | hunt2.tsv
+37: 1 | 2 | hunt20.tsv
+38: 1 | 2 | hunt3.tsv
+39: 1 | 2 | hunt4.tsv
+40: 1 | 2 | hunt5.tsv
+41: 1 | 2 | hunt6.tsv
+42: 1 | 2 | hunt7.tsv
+43: 1 | 2 | hunt8.tsv
