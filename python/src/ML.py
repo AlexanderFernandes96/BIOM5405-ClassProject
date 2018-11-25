@@ -145,7 +145,7 @@ if __name__ == "__main__":
         model_4 = lstmn.baseline_model(lrg_lstm_units, n_timesteps)
         model_5 = lstmn.baseline_model(hug_lstm_units, n_timesteps)
 
-        print('Tiny Model', sml_lstm_units, 'units')
+        print('Tiny Model', tin_lstm_units, 'units')
         print("X_train:", X_1_train.shape)
         model_1.fit(X_1_train, y_1_train,
                     validation_data=(X_1_val, y_1_val),
@@ -169,7 +169,7 @@ if __name__ == "__main__":
                     validation_data=(X_4_val, y_4_val),
                     epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
 
-        print('Large Model', lrg_lstm_units, 'units')
+        print('Huge Model', hug_lstm_units, 'units')
         print("X_train:", X_5_train.shape)
         model_5.fit(X_5_train, y_5_train,
                     validation_data=(X_5_val, y_5_val),
