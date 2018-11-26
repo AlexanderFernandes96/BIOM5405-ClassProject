@@ -98,16 +98,28 @@ def load_data(folder):
 
     for f_i in range(len(X_file_list)):
         if any(x in file_list[f_i] for x in ['als', 'control', 'hunt', 'park']):
-            data = genfromtxt(folder + file_list[f_i], delimiter=',')
+            data = genfromtxt(folder + file_list[f_i], delimiter=',', dtype=float)
             X[f_i] = data
 
     # Crop time series data
     X_crop = X[:, int(NUM_TS_CROP / 2):int(NUM_TIME_SERIES - NUM_TS_CROP / 2), :]
 
     # Downsample time series data
-    X_half = X[:, 0::NUM_SKIP_SAMP, :]
+    X_half = X_crop[:, 0::NUM_SKIP_SAMP, :]
 
-    return X_half, np.asarray(y)
+    # Convert nan to 0
+    for s in range(X_half.shape[0]):
+        for t in range(X_half.shape[1]):
+            for f in range(X_half.shape[2]):
+                if np.isnan(X_half[s, t, f]):
+                    X_half[s, t, f] = 0
+
+    # Assert no Inf or nan data
+    assert not np.isnan(X_half.any())
+
+    X_final = X_half
+
+    return X_final, np.asarray(y)
 
 
 def baseline_model(num_lstm_cells=NUM_LSTM_CELLS, num_time_series=(NUM_TIME_SERIES-NUM_TS_CROP)):
