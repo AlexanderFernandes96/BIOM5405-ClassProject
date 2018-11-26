@@ -110,12 +110,12 @@ def baseline_model(num_lstm_cells=NUM_LSTM_CELLS, num_time_series=(NUM_TIME_SERI
     model = Sequential()
 
     # Input:
-    model.add(Dense(NUM_FEATURES, activation='relu',
-                    input_shape=(num_time_series, NUM_FEATURES)))
-    model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
-    model.add(Dense(2, activation='relu'))
-    model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
-    model.add(Dense(NUM_FEATURES, activation='sigmoid'))
+    # model.add(Dense(NUM_FEATURES, activation='relu',
+    #                 input_shape=(num_time_series, NUM_FEATURES)))
+    # model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
+    # model.add(Dense(2, activation='relu'))
+    # model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
+    # model.add(Dense(NUM_FEATURES, activation='sigmoid'))
 
     # CNN 1D
     # model.add(Conv1D(filters=32,
@@ -131,7 +131,8 @@ def baseline_model(num_lstm_cells=NUM_LSTM_CELLS, num_time_series=(NUM_TIME_SERI
     model.add(LSTM(num_lstm_cells,
                    dropout=0.1,
                    recurrent_dropout=0.1,
-                   return_sequences=True))
+                   return_sequences=True,
+				   input_shape=(num_time_series, NUM_FEATURES)))
 
     # LSTM Support Layer
     model.add(LSTM(2))
