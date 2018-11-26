@@ -5,6 +5,7 @@ https://www.kaggle.com/ternaryrealm/lstm-time-series-explorations-with-keras"""
 
 import time
 import itertools
+import os
 from os import listdir
 from os.path import isfile, join
 
@@ -27,11 +28,14 @@ import matplotlib.pyplot as plt
 # seed = 7
 # np.random.seed(seed)
 
+# Disable tensorflow warning messages
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 # Data Parameters
 NUM_CLASS = 4  # Change to two for Healthy vs Diseased binary classification
 NUM_FEATURES = 14
 NUM_TIME_SERIES = 90000
-NUM_TS_CROP = 10000  # time series data cropped by NUM_TS_CROP/2 on start and end
+NUM_TS_CROP = 20000  # time series data cropped by NUM_TS_CROP/2 on start and end
 
 # Split Parameters
 NUM_K_SPLIT = 5  # number k fold to split into training and test
@@ -40,7 +44,7 @@ VAL_SPLIT = 0.3  # validation set split from split training set (randomized for 
 # Run Parameters
 NUM_LSTM_CELLS = 50
 NUM_EPOCH = 15
-BATCH_SIZE = 20
+BATCH_SIZE = 500
 
 if NUM_CLASS == 4:
     LABEL_CTRL = 0
@@ -99,7 +103,10 @@ def load_data(folder):
     # Crop time series data
     X_crop = X[:, int(NUM_TS_CROP / 2):int(NUM_TIME_SERIES - NUM_TS_CROP / 2), :]
 
-    return X_crop, np.asarray(y)
+    # Halve time series data
+    X_half = X[:, 0::2, :]
+
+    return X_half, np.asarray(y)
 
 
 def baseline_model(num_lstm_cells=NUM_LSTM_CELLS, num_time_series=(NUM_TIME_SERIES-NUM_TS_CROP)):
@@ -110,12 +117,12 @@ def baseline_model(num_lstm_cells=NUM_LSTM_CELLS, num_time_series=(NUM_TIME_SERI
     model = Sequential()
 
     # Input:
-    model.add(Dense(NUM_FEATURES, activation='relu',
+    model.add(Dense(NUM_FEATURES, activation='sigmoid',
                     input_shape=(num_time_series, NUM_FEATURES)))
-    model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
-    model.add(Dense(2, activation='relu'))
-    model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
-    model.add(Dense(NUM_FEATURES, activation='sigmoid'))
+    # model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
+    # model.add(Dense(NUM_CLASS, activation='relu'))
+    # model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
+    # model.add(Dense(NUM_FEATURES, activation='sigmoid'))
 
     # CNN 1D
     # model.add(Conv1D(filters=32,
@@ -131,10 +138,13 @@ def baseline_model(num_lstm_cells=NUM_LSTM_CELLS, num_time_series=(NUM_TIME_SERI
     model.add(LSTM(num_lstm_cells,
                    dropout=0.1,
                    recurrent_dropout=0.1,
-                   return_sequences=True))
+                   return_sequences=True
+                   # input_shape=(num_time_series, NUM_FEATURES
+                   )
+              )
 
     # LSTM Support Layer
-    model.add(LSTM(2))
+    model.add(LSTM(NUM_CLASS))
 
     # Output: Dense Layer Classifier
     # compile and fit our model
@@ -209,8 +219,10 @@ if __name__ == "__main__":
     cvscores = []
     cm_sum = None
 
-    fold_number = 1
+    # Bagging
+    nbags = 5
 
+    fold_number = 1 # Print logging counter
     for train_index, test_index in kfold.split(X_total, y_total):
 
         print("CV Fold %d/%d" % (fold_number, NUM_K_SPLIT))
@@ -229,6 +241,7 @@ if __name__ == "__main__":
         # Split validation set from the training set
         X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=VAL_SPLIT)
 
+        # Regular Model
         model = baseline_model()
         model.fit(X_train, y_train,
                   validation_data=(X_val, y_val),

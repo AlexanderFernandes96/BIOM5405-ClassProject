@@ -1,10 +1,16 @@
 """Meta Learning Strategy"""
+from keras import Model
+from keras.layers import Dense
+from keras.layers.merge import concatenate
 from keras.utils import to_categorical
 from scipy.stats import mode
 from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import StratifiedKFold, train_test_split
 
 import os
+
+from sklearn.utils import resample
+
 import python.src.LSTMN as lstmn
 import time
 import numpy as np
@@ -22,17 +28,17 @@ if __name__ == "__main__":
     project_folder = '/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/'
     # project_folder = 'D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/'
 
-    # Meta Learning Classifier Parameters
-    tin_lstm_units = 1
-    sml_lstm_units = 2
-    med_lstm_units = 5
-    lrg_lstm_units = 10
-    hug_lstm_units = 15
-
     # LSTMN Parameters:
     lstmn.NUM_CLASS = 4  # Change to two for Healthy vs Diseased binary classification
-    lstmn.NUM_EPOCH = 6
-    lstmn.BATCH_SIZE = 10
+    lstmn.NUM_EPOCH = 15
+    lstmn.BATCH_SIZE = 500
+
+    # Meta Learning Classifier Parameters
+    tin_lstm_units = 2
+    sml_lstm_units = 10
+    med_lstm_units = 25
+    lrg_lstm_units = 50
+    hug_lstm_units = 100
 
     if lstmn.NUM_CLASS == 4:
         lstmn.LABEL_CTRL = 0
@@ -68,9 +74,9 @@ if __name__ == "__main__":
     print("Cropped Time Series Length:", n_timesteps)
     print("Number Features:", lstmn.NUM_FEATURES)
 
-    # Time series split
-    num_classifiers = 5
-    n_timesteps = int(n_timesteps / num_classifiers)
+    # # Time series split
+    # num_classifiers = 5
+    # n_timesteps = int(n_timesteps / num_classifiers)
 
     # define 5-fold cross validation test harness
     kfold = StratifiedKFold(n_splits=lstmn.NUM_K_SPLIT, shuffle=True)
@@ -94,57 +100,98 @@ if __name__ == "__main__":
         print("TEST:", len(test_index), test_index.tolist())
 
         # Split Data from time series axis into equal portions
-        X_1_train = np.empty([X_train.shape[0], n_timesteps, lstmn.NUM_FEATURES], float)
+        # X_1_train = np.empty([X_train.shape[0], n_timesteps, lstmn.NUM_FEATURES], float)
+        # X_2_train = X_1_train
+        # X_3_train = X_1_train
+        # X_4_train = X_1_train
+        # X_5_train = X_1_train
+        #
+        # X_1_test = np.empty([X_test.shape[0], n_timesteps, lstmn.NUM_FEATURES], float)
+        # X_2_test = X_1_test
+        # X_3_test = X_1_test
+        # X_4_test = X_1_test
+        # X_5_test = X_1_test
+        #
+        # Split accross time
+        # for sub in range(X_train.shape[0]):
+        #     X_1_train[sub, :, :] = X_train[sub, 0*n_timesteps:1*n_timesteps, :]
+        #     X_2_train[sub, :, :] = X_train[sub, 1*n_timesteps:2*n_timesteps, :]
+        #     X_3_train[sub, :, :] = X_train[sub, 2*n_timesteps:3*n_timesteps, :]
+        #     X_4_train[sub, :, :] = X_train[sub, 3*n_timesteps:4*n_timesteps, :]
+        #     X_5_train[sub, :, :] = X_train[sub, 4*n_timesteps:5*n_timesteps, :]
+        # for sub in range(X_test.shape[0]):
+        #     X_1_test[sub, :, :] = X_test[sub, 0*n_timesteps:1*n_timesteps, :]
+        #     X_2_test[sub, :, :] = X_test[sub, 1*n_timesteps:2*n_timesteps, :]
+        #     X_3_test[sub, :, :] = X_test[sub, 2*n_timesteps:3*n_timesteps, :]
+        #     X_4_test[sub, :, :] = X_test[sub, 3*n_timesteps:4*n_timesteps, :]
+        #     X_5_test[sub, :, :] = X_test[sub, 4*n_timesteps:5*n_timesteps, :]
+        #
+        # y_1_train = y_train
+        # y_2_train = y_train
+        # y_3_train = y_train
+        # y_4_train = y_train
+        # y_5_train = y_train
+
+
+        # Bootstrapping
+        nbootstrap = X_train.shape[0] * 3
+        X_1_seed = np.random.choice(X_train.shape[0], nbootstrap)
+        X_2_seed = np.random.choice(X_train.shape[0], nbootstrap)
+        X_3_seed = np.random.choice(X_train.shape[0], nbootstrap)
+        X_4_seed = np.random.choice(X_train.shape[0], nbootstrap)
+        X_5_seed = np.random.choice(X_train.shape[0], nbootstrap)
+
+        X_1_train = np.empty([nbootstrap, n_timesteps, lstmn.NUM_FEATURES], float)
         X_2_train = X_1_train
         X_3_train = X_1_train
         X_4_train = X_1_train
         X_5_train = X_1_train
 
-        X_1_test = np.empty([X_test.shape[0], n_timesteps, lstmn.NUM_FEATURES], float)
-        X_2_test = X_1_test
-        X_3_test = X_1_test
-        X_4_test = X_1_test
-        X_5_test = X_1_test
+        X_1_test = X_test
+        X_2_test = X_test
+        X_3_test = X_test
+        X_4_test = X_test
+        X_5_test = X_test
 
-        for sub in range(X_train.shape[0]):
-            X_1_train[sub, :, :] = X_train[sub, 0*n_timesteps:1*n_timesteps, :]
-            X_2_train[sub, :, :] = X_train[sub, 1*n_timesteps:2*n_timesteps, :]
-            X_3_train[sub, :, :] = X_train[sub, 2*n_timesteps:3*n_timesteps, :]
-            X_4_train[sub, :, :] = X_train[sub, 3*n_timesteps:4*n_timesteps, :]
-            X_5_train[sub, :, :] = X_train[sub, 4*n_timesteps:5*n_timesteps, :]
-        for sub in range(X_test.shape[0]):
-            X_1_test[sub, :, :] = X_test[sub, 0*n_timesteps:1*n_timesteps, :]
-            X_2_test[sub, :, :] = X_test[sub, 1*n_timesteps:2*n_timesteps, :]
-            X_3_test[sub, :, :] = X_test[sub, 2*n_timesteps:3*n_timesteps, :]
-            X_4_test[sub, :, :] = X_test[sub, 3*n_timesteps:4*n_timesteps, :]
-            X_5_test[sub, :, :] = X_test[sub, 4*n_timesteps:5*n_timesteps, :]
+        y_1_train = np.empty([nbootstrap, 4])
+        y_2_train = y_1_train
+        y_3_train = y_1_train
+        y_4_train = y_1_train
+        y_5_train = y_1_train
 
-        y_1_train = y_train
-        y_2_train = y_train
-        y_3_train = y_train
-        y_4_train = y_train
-        y_5_train = y_train
+        for b in range(nbootstrap):
+            X_1_train[b, :, :] = X_train[X_1_seed[b], :, :]
+            X_2_train[b, :, :] = X_train[X_2_seed[b], :, :]
+            X_3_train[b, :, :] = X_train[X_3_seed[b], :, :]
+            X_4_train[b, :, :] = X_train[X_4_seed[b], :, :]
+            X_5_train[b, :, :] = X_train[X_5_seed[b], :, :]
+            y_1_train[b] = y_train[X_1_seed[b]]
+            y_2_train[b] = y_train[X_2_seed[b]]
+            y_3_train[b] = y_train[X_3_seed[b]]
+            y_4_train[b] = y_train[X_4_seed[b]]
+            y_5_train[b] = y_train[X_5_seed[b]]
 
+        print("Bootstrap Sample Set:")
         print("Tiny   | train:",  X_1_train.shape, "test:", X_1_test.shape)
         print("Small  | train:",  X_2_train.shape, "test:", X_2_test.shape)
         print("Medium | train:",  X_3_train.shape, "test:", X_3_test.shape)
         print("Large  | train:",  X_4_train.shape, "test:", X_4_test.shape)
         print("Huge   | train:",  X_5_train.shape, "test:", X_5_test.shape)
 
-        # Split validation set from the training set
-        X_1_train, X_1_val, y_1_train, y_1_val = train_test_split(X_1_train, y_1_train, test_size=lstmn.VAL_SPLIT)
-        X_2_train, X_2_val, y_2_train, y_2_val = train_test_split(X_2_train, y_2_train, test_size=lstmn.VAL_SPLIT)
-        X_3_train, X_3_val, y_3_train, y_3_val = train_test_split(X_3_train, y_3_train, test_size=lstmn.VAL_SPLIT)
-        X_4_train, X_4_val, y_4_train, y_4_val = train_test_split(X_4_train, y_4_train, test_size=lstmn.VAL_SPLIT)
-        X_5_train, X_5_val, y_5_train, y_5_val = train_test_split(X_5_train, y_5_train, test_size=lstmn.VAL_SPLIT)
-
-        # Classifiers: Small, Medium, Large lstmn models
+        # Classifiers: Tiny, Small, Medium, Large, Huge lstmn models
         model_1 = lstmn.baseline_model(tin_lstm_units, n_timesteps)
         model_2 = lstmn.baseline_model(sml_lstm_units, n_timesteps)
         model_3 = lstmn.baseline_model(med_lstm_units, n_timesteps)
         model_4 = lstmn.baseline_model(lrg_lstm_units, n_timesteps)
         model_5 = lstmn.baseline_model(hug_lstm_units, n_timesteps)
 
+        # Max Voting
+        # Split validation set from the training set
+        X_1_train, X_1_val, y_1_train, y_1_val = train_test_split(X_1_train, y_1_train, test_size=lstmn.VAL_SPLIT)
+        X_2_train, X_2_val, y_2_train, y_2_val = train_test_split(X_2_train, y_2_train, test_size=lstmn.VAL_SPLIT)
+        X_3_train, X_3_val, y_3_train, y_3_val = train_test_split(X_3_train, y_3_train, test_size=lstmn.VAL_SPLIT)
+        X_4_train, X_4_val, y_4_train, y_4_val = train_test_split(X_4_train, y_4_train, test_size=lstmn.VAL_SPLIT)
+        X_5_train, X_5_val, y_5_train, y_5_val = train_test_split(X_5_train, y_5_train, test_size=lstmn.VAL_SPLIT)
         print('Tiny Model', tin_lstm_units, 'units')
         print("X_train:", X_1_train.shape)
         model_1.fit(X_1_train, y_1_train,
@@ -180,7 +227,7 @@ if __name__ == "__main__":
         model_3_pred = model_3.predict(X_3_test, batch_size=lstmn.BATCH_SIZE)
         model_4_pred = model_4.predict(X_4_test, batch_size=lstmn.BATCH_SIZE)
         model_5_pred = model_5.predict(X_5_test, batch_size=lstmn.BATCH_SIZE)
-
+        #
         # classify output predictions
         if lstmn.NUM_CLASS == 2:
             model_1_pred = (model_1_pred > 0.5)
@@ -271,6 +318,7 @@ if __name__ == "__main__":
                              model_4_pred[i],
                              model_5_pred[i]])
             final_pred = np.append(final_pred, max_vote[0])
+
 
         print("final_pred: ", final_pred)
 
