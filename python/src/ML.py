@@ -29,8 +29,8 @@ if __name__ == "__main__":
     # project_folder = 'D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/'
 
     # LSTMN Parameters:
-    lstmn.NUM_CLASS = 4  # Change to two for Healthy vs Diseased binary classification
-    lstmn.NUM_EPOCH = 15
+    lstmn.NUM_CLASS = 2  # Change to two for Healthy vs Diseased binary classification
+    lstmn.NUM_EPOCH = 20
     lstmn.BATCH_SIZE = 500
 
     # Meta Learning Classifier Parameters
@@ -153,7 +153,11 @@ if __name__ == "__main__":
         X_4_test = X_test
         X_5_test = X_test
 
-        y_1_train = np.empty([nbootstrap, 4])
+        if lstmn.NUM_CLASS == 4:
+            y_1_train = np.empty([nbootstrap, 4])
+        elif lstmn.NUM_CLASS == 2:
+            y_1_train = np.empty([nbootstrap, 1])
+
         y_2_train = y_1_train
         y_3_train = y_1_train
         y_4_train = y_1_train

@@ -36,6 +36,7 @@ NUM_CLASS = 4  # Change to two for Healthy vs Diseased binary classification
 NUM_FEATURES = 20
 NUM_TIME_SERIES = 90000
 NUM_TS_CROP = 20000  # time series data cropped by NUM_TS_CROP/2 on start and end
+NUM_SKIP_SAMP = 5 # number of time series samples to skip over (after crop)
 
 # Split Parameters
 NUM_K_SPLIT = 5  # number k fold to split into training and test
@@ -43,7 +44,7 @@ VAL_SPLIT = 0.3  # validation set split from split training set (randomized for 
 
 # Run Parameters
 NUM_LSTM_CELLS = 50
-NUM_EPOCH = 15
+NUM_EPOCH = 20
 BATCH_SIZE = 500
 
 if NUM_CLASS == 4:
@@ -103,8 +104,8 @@ def load_data(folder):
     # Crop time series data
     X_crop = X[:, int(NUM_TS_CROP / 2):int(NUM_TIME_SERIES - NUM_TS_CROP / 2), :]
 
-    # Halve time series data
-    X_half = X[:, 0::2, :]
+    # Downsample time series data
+    X_half = X[:, 0::NUM_SKIP_SAMP, :]
 
     return X_half, np.asarray(y)
 
