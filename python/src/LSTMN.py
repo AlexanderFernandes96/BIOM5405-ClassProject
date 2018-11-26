@@ -33,7 +33,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 # Data Parameters
 NUM_CLASS = 4  # Change to two for Healthy vs Diseased binary classification
-NUM_FEATURES = 14
+NUM_FEATURES = 20
 NUM_TIME_SERIES = 90000
 NUM_TS_CROP = 20000  # time series data cropped by NUM_TS_CROP/2 on start and end
 
