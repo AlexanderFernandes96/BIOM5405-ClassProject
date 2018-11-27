@@ -1,0 +1,1910 @@
+"""Long Short Term Memory Network Classifier python module
+
+website references:
+https://www.kaggle.com/ternaryrealm/lstm-time-series-explorations-with-keras"""
+
+import time
+import itertools
+import os
+from os import listdir
+from os.path import isfile, join
+
+from numpy import genfromtxt
+import numpy as np
+from keras.models import Sequential
+from keras.layers import LSTM, Dense
+from keras.wrappers.scikit_learn import KerasRegressor
+from keras.layers.convolutional import Conv1D
+from keras.layers.convolutional import MaxPooling1D
+from keras.utils import to_categorical
+from sklearn.ensemble import AdaBoostClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix
+from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import cross_val_score
+import matplotlib.pyplot as plt
+
+# fix random seed for reproducibility
+# seed = 7
+# np.random.seed(seed)
+
+# Disable tensorflow warning messages
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+# Data Parameters
+NUM_CLASS = 4  # Change to two for Healthy vs Diseased binary classification
+NUM_FEATURES = 20
+NUM_TIME_SERIES = 90000
+NUM_TS_CROP = 20000  # time series data cropped by NUM_TS_CROP/2 on start and end
+NUM_SKIP_SAMP = 5 # number of time series samples to skip over (after crop)
+
+# Split Parameters
+NUM_K_SPLIT = 5  # number k fold to split into training and test
+VAL_SPLIT = 0.3  # validation set split from split training set (randomized for each k fold cross validation)
+
+# Run Parameters
+NUM_LSTM_CELLS = 50
+NUM_EPOCH = 20
+BATCH_SIZE = 500
+
+if NUM_CLASS == 4:
+    LABEL_CTRL = 0
+    LABEL_ALS = 1
+    LABEL_HUNT = 2
+    LABEL_PARK = 3
+    n_outputs = 4
+    class_names = ['Control', 'ALS', 'Hunting', 'Parkingson']
+else:
+    LABEL_CTRL = 0
+    LABEL_ALS = 1
+    LABEL_HUNT = 1
+    LABEL_PARK = 1
+    n_outputs = 1
+    class_names = ['Healthy', 'Diseased']
+
+
+def load_data(folder):
+    file_list = [f for f in listdir(folder) if isfile(join(folder, f))]
+
+    # Labels for time series data
+    y = []
+
+    X_file_list = []
+
+    print('Loading: label | file')
+    for file_name in file_list:
+        if 'als' in file_name:
+            y.append(LABEL_ALS)
+            X_file_list.append(file_name)
+            print(LABEL_ALS, end='')
+        elif 'control' in file_name:
+            y.append(LABEL_CTRL)
+            X_file_list.append(file_name)
+            print(LABEL_CTRL, end='')
+        elif 'hunt' in file_name:
+            y.append(LABEL_HUNT)
+            X_file_list.append(file_name)
+            print(LABEL_HUNT, end='')
+        elif 'park' in file_name:
+            y.append(LABEL_PARK)
+            X_file_list.append(file_name)
+            print(LABEL_PARK, end='')
+        else:
+            print('~', end='')
+        print(' |', file_name)
+
+    # Time series data, (only using leg 0 for the time being)
+    X = np.empty([len(y), NUM_TIME_SERIES, NUM_FEATURES], float)
+
+    for f_i in range(len(X_file_list)):
+        if any(x in file_list[f_i] for x in ['als', 'control', 'hunt', 'park']):
+            data = genfromtxt(folder + file_list[f_i], delimiter=',', dtype=float)
+            X[f_i] = data
+
+    # Crop time series data
+    X_crop = X[:, int(NUM_TS_CROP / 2):int(NUM_TIME_SERIES - NUM_TS_CROP / 2), :]
+
+    # Downsample time series data
+    X_half = X_crop[:, 0::NUM_SKIP_SAMP, :]
+
+    # Convert nan to 0
+    for s in range(X_half.shape[0]):
+        for t in range(X_half.shape[1]):
+            for f in range(X_half.shape[2]):
+                if np.isnan(X_half[s, t, f]):
+                    X_half[s, t, f] = 0
+
+    # Assert no Inf or nan data
+    assert not np.isnan(X_half.any())
+
+    X_final = X_half
+
+    return X_final, np.asarray(y)
+
+
+def baseline_model(num_lstm_cells=NUM_LSTM_CELLS, num_time_series=(NUM_TIME_SERIES-NUM_TS_CROP)):
+    # The model will be designed in the following manner:
+    # LSTM -> 1 sigmoid Dense Layer
+
+    # initialize a sequential keras model
+    model = Sequential()
+
+    # Input:
+    model.add(Dense(NUM_FEATURES, activation='sigmoid',
+                    input_shape=(num_time_series, NUM_FEATURES)))
+    # model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
+    # model.add(Dense(NUM_CLASS, activation='relu'))
+    # model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
+    # model.add(Dense(NUM_FEATURES, activation='sigmoid'))
+
+    # CNN 1D
+    # model.add(Conv1D(filters=32,
+    #                  kernel_size=3,
+    #                  padding='same',
+    #                  activation='relu',
+    #                  input_shape=(num_time_series, NUM_FEATURES)))
+    #
+    # # Pooling
+    # model.add(MaxPooling1D(pool_size=2))
+
+    # LSTM Master Layer
+    model.add(LSTM(num_lstm_cells,
+                   dropout=0.1,
+                   recurrent_dropout=0.1,
+                   return_sequences=True
+                   # input_shape=(num_time_series, NUM_FEATURES
+                   )
+              )
+
+    # LSTM Support Layer
+    model.add(LSTM(NUM_CLASS))
+
+    # Output: Dense Layer Classifier
+    # compile and fit our model
+    if NUM_CLASS == 2:
+        model.add(Dense(n_outputs, activation='sigmoid'))
+        model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    elif NUM_CLASS == 4:
+        model.add(Dense(n_outputs, activation='softmax'))
+        model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    return model
+
+
+def plot_confusion_matrix(cm, classes,
+                          normalize=False,
+                          title='Confusion matrix',
+                          cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        print("Normalized confusion matrix")
+    else:
+        print('Confusion matrix, without normalization')
+
+    print(cm)
+
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45)
+    plt.yticks(tick_marks, classes)
+
+    fmt = '.2f' if normalize else 'd'
+    thresh = cm.max() / 2.
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, format(cm[i, j], fmt),
+                 horizontalalignment="center",
+                 color="white" if cm[i, j] > thresh else "black")
+
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+    plt.tight_layout()
+
+
+# Run the following script using the following command via "python -m LSTMN.py"
+if __name__ == "__main__":
+    # Time Start
+    start_time = time.time()
+
+    project_folder = '/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/'
+    # project_folder = 'D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/'
+
+    X_total, y_total = load_data(project_folder + 'data/')
+
+    print('X_total =', X_total.shape)
+    print('y_total = ', y_total.tolist())
+
+    n_timesteps = X_total.shape[1]
+    n_features = X_total.shape[2]
+
+    print("Number Classes:", n_outputs)
+    print("Cropped Time Series Length:", n_timesteps)
+    print("Number Features:", NUM_FEATURES)
+
+    # define 5-fold cross validation test harness
+    kfold = StratifiedKFold(n_splits=NUM_K_SPLIT, shuffle=True)
+    cvscores = []
+    cm_sum = None
+
+    # Bagging
+    nbags = 5
+
+    fold_number = 1 # Print logging counter
+    for train_index, test_index in kfold.split(X_total, y_total):
+
+        print("CV Fold %d/%d" % (fold_number, NUM_K_SPLIT))
+        fold_number += 1
+
+        X_train, X_test = X_total[train_index], X_total[test_index]
+        y_train, y_test = y_total[train_index], y_total[test_index]
+
+        if NUM_CLASS == 4:
+            y_train = to_categorical(y_train, num_classes=n_outputs)
+            y_test = to_categorical(y_test, num_classes=n_outputs)
+
+        print("TRAIN/VAL:", len(train_index), train_index.tolist())
+        print("TEST:", len(test_index), test_index.tolist())
+
+        # Split validation set from the training set
+        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=VAL_SPLIT)
+
+        # Regular Model
+        model = baseline_model()
+        model.fit(X_train, y_train,
+                  validation_data=(X_val, y_val),
+                  epochs=NUM_EPOCH,
+                  batch_size=BATCH_SIZE,
+                  verbose=2)
+        scores = model.evaluate(X_test, y_test, verbose=2)
+        print("%s: %.2f%%" % (model.metrics_names[1], scores[1] * 100))
+        cvscores.append(scores)
+        y_pred = model.predict(X_test, batch_size=BATCH_SIZE)
+
+        print("y_test:", y_test)
+        print("y_pred:", y_pred)
+
+        # classify output predictions
+        if NUM_CLASS == 2:
+            y_pred = (y_pred > 0.5)
+        elif NUM_CLASS == 4:
+            y_ohe = y_pred
+            y_pred = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                y_pred.append(mx_i)
+            y_ohe = y_test
+            y_test = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                y_test.append(mx_i)
+
+        print("y_test:", y_test)
+        print("y_pred:", y_pred)
+
+        # confusion matrix
+        if cm_sum is None:
+            cm_sum = confusion_matrix(y_test, y_pred)
+        else:
+            cm_sum += confusion_matrix(y_test, y_pred)
+
+    print("%.2f%% (+/- %.2f%%)" % (np.mean(cvscores), np.std(cvscores)))
+
+    # Plot non-normalized confusion matrix
+    plt.figure()
+    plot_confusion_matrix(cm_sum, classes=class_names, title='Confusion matrix, without normalization')
+
+    # Time End
+    elapsed_time = time.time()
+    hours, rem = divmod(elapsed_time - start_time, 3600)
+    minutes, seconds = divmod(rem, 60)
+    print("Elapsed Time: {:0>2}:{:0>2}:{:05.2f}".format(int(hours), int(minutes), seconds))
+
+    plt.show()
+
+
+
+"""Meta Learning Strategy"""
+from keras import Model
+from keras.layers import Dense
+from keras.layers.merge import concatenate
+from keras.utils import to_categorical
+from scipy.stats import mode
+from sklearn.metrics import confusion_matrix
+from sklearn.model_selection import StratifiedKFold, train_test_split
+
+import os
+
+from sklearn.utils import resample
+
+import python.src.LSTMN as lstmn
+import time
+import numpy as np
+import matplotlib.pyplot as plt
+import random
+
+# Disable tensorflow warning messages
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+# Run the following script using the following command via "python -m ML.py"
+if __name__ == "__main__":
+    # Time Start
+    start_time = time.time()
+
+    project_folder = '/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/'
+    # project_folder = 'D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/'
+
+    # LSTMN Parameters:
+    lstmn.NUM_CLASS = 4  # Change to two for Healthy vs Diseased binary classification
+    lstmn.NUM_EPOCH = 20
+    lstmn.BATCH_SIZE = 500
+
+    # Meta Learning Classifier Parameters
+    tin_lstm_units = 2
+    sml_lstm_units = 10
+    med_lstm_units = 25
+    lrg_lstm_units = 50
+    hug_lstm_units = 100
+
+    if lstmn.NUM_CLASS == 4:
+        lstmn.LABEL_CTRL = 0
+        lstmn.LABEL_ALS = 1
+        lstmn.LABEL_HUNT = 2
+        lstmn.LABEL_PARK = 3
+        lstmn.n_outputs = 4
+        class_names = ['Control', 'ALS', 'Hunting', 'Parkingson']
+    else:
+        lstmn.LABEL_CTRL = 0
+        lstmn.LABEL_ALS = 1
+        lstmn.LABEL_HUNT = 1
+        lstmn.LABEL_PARK = 1
+        lstmn.n_outputs = 1
+        class_names = ['Healthy', 'Diseased']
+
+    # Load Data
+    X_total, y_total = lstmn.load_data(project_folder + 'data/')
+
+    print('X_total =', X_total.shape)
+    print('y_total = ', y_total.tolist())
+
+    n_timesteps = X_total.shape[1]
+    n_features = X_total.shape[2]
+    if lstmn.LABEL_ALS == lstmn.LABEL_HUNT == lstmn.LABEL_PARK:
+        # Health vs Diseased
+        n_outputs = 1
+    else:
+        # Classify Disease Type
+        n_outputs = 4
+
+    print("Number Classes:", n_outputs)
+    print("Cropped Time Series Length:", n_timesteps)
+    print("Number Features:", lstmn.NUM_FEATURES)
+
+    # # Time series split
+    # num_classifiers = 5
+    # n_timesteps = int(n_timesteps / num_classifiers)
+
+    # define 5-fold cross validation test harness
+    kfold = StratifiedKFold(n_splits=lstmn.NUM_K_SPLIT, shuffle=True)
+    cvscores = []
+    cm_sum = None
+
+    fold_number = 1
+    for train_index, test_index in kfold.split(X_total, y_total):
+
+        print("\nCV Fold %d/%d" % (fold_number, lstmn.NUM_K_SPLIT))
+        fold_number += 1
+
+        X_train, X_test = X_total[train_index], X_total[test_index]
+        y_train, y_test = y_total[train_index], y_total[test_index]
+
+        if lstmn.NUM_CLASS == 4:
+            y_train = to_categorical(y_train, num_classes=n_outputs)
+            y_test = to_categorical(y_test, num_classes=n_outputs)
+
+        print("TRAIN/VAL:", len(train_index), train_index.tolist())
+        print("TEST:", len(test_index), test_index.tolist())
+
+        # Split Data from time series axis into equal portions
+        # X_1_train = np.empty([X_train.shape[0], n_timesteps, lstmn.NUM_FEATURES], float)
+        # X_2_train = X_1_train
+        # X_3_train = X_1_train
+        # X_4_train = X_1_train
+        # X_5_train = X_1_train
+        #
+        # X_1_test = np.empty([X_test.shape[0], n_timesteps, lstmn.NUM_FEATURES], float)
+        # X_2_test = X_1_test
+        # X_3_test = X_1_test
+        # X_4_test = X_1_test
+        # X_5_test = X_1_test
+        #
+        # Split accross time
+        # for sub in range(X_train.shape[0]):
+        #     X_1_train[sub, :, :] = X_train[sub, 0*n_timesteps:1*n_timesteps, :]
+        #     X_2_train[sub, :, :] = X_train[sub, 1*n_timesteps:2*n_timesteps, :]
+        #     X_3_train[sub, :, :] = X_train[sub, 2*n_timesteps:3*n_timesteps, :]
+        #     X_4_train[sub, :, :] = X_train[sub, 3*n_timesteps:4*n_timesteps, :]
+        #     X_5_train[sub, :, :] = X_train[sub, 4*n_timesteps:5*n_timesteps, :]
+        # for sub in range(X_test.shape[0]):
+        #     X_1_test[sub, :, :] = X_test[sub, 0*n_timesteps:1*n_timesteps, :]
+        #     X_2_test[sub, :, :] = X_test[sub, 1*n_timesteps:2*n_timesteps, :]
+        #     X_3_test[sub, :, :] = X_test[sub, 2*n_timesteps:3*n_timesteps, :]
+        #     X_4_test[sub, :, :] = X_test[sub, 3*n_timesteps:4*n_timesteps, :]
+        #     X_5_test[sub, :, :] = X_test[sub, 4*n_timesteps:5*n_timesteps, :]
+        #
+        # y_1_train = y_train
+        # y_2_train = y_train
+        # y_3_train = y_train
+        # y_4_train = y_train
+        # y_5_train = y_train
+
+
+        # Bootstrapping
+        nbootstrap = X_train.shape[0] * 3
+        X_1_seed = np.random.choice(X_train.shape[0], nbootstrap)
+        X_2_seed = np.random.choice(X_train.shape[0], nbootstrap)
+        X_3_seed = np.random.choice(X_train.shape[0], nbootstrap)
+        X_4_seed = np.random.choice(X_train.shape[0], nbootstrap)
+        X_5_seed = np.random.choice(X_train.shape[0], nbootstrap)
+
+        X_1_train = np.empty([nbootstrap, n_timesteps, lstmn.NUM_FEATURES], float)
+        X_2_train = X_1_train
+        X_3_train = X_1_train
+        X_4_train = X_1_train
+        X_5_train = X_1_train
+
+        X_1_test = X_test
+        X_2_test = X_test
+        X_3_test = X_test
+        X_4_test = X_test
+        X_5_test = X_test
+
+        if lstmn.NUM_CLASS == 4:
+            y_1_train = np.empty([nbootstrap, 4])
+        elif lstmn.NUM_CLASS == 2:
+            y_1_train = np.empty([nbootstrap, 1])
+
+        y_2_train = y_1_train
+        y_3_train = y_1_train
+        y_4_train = y_1_train
+        y_5_train = y_1_train
+
+        for b in range(nbootstrap):
+            X_1_train[b, :, :] = X_train[X_1_seed[b], :, :]
+            X_2_train[b, :, :] = X_train[X_2_seed[b], :, :]
+            X_3_train[b, :, :] = X_train[X_3_seed[b], :, :]
+            X_4_train[b, :, :] = X_train[X_4_seed[b], :, :]
+            X_5_train[b, :, :] = X_train[X_5_seed[b], :, :]
+            y_1_train[b] = y_train[X_1_seed[b]]
+            y_2_train[b] = y_train[X_2_seed[b]]
+            y_3_train[b] = y_train[X_3_seed[b]]
+            y_4_train[b] = y_train[X_4_seed[b]]
+            y_5_train[b] = y_train[X_5_seed[b]]
+
+        print("Bootstrap Sample Set:")
+        print("Tiny   | train:",  X_1_train.shape, "test:", X_1_test.shape)
+        print("Small  | train:",  X_2_train.shape, "test:", X_2_test.shape)
+        print("Medium | train:",  X_3_train.shape, "test:", X_3_test.shape)
+        print("Large  | train:",  X_4_train.shape, "test:", X_4_test.shape)
+        print("Huge   | train:",  X_5_train.shape, "test:", X_5_test.shape)
+
+        # Classifiers: Tiny, Small, Medium, Large, Huge lstmn models
+        model_1 = lstmn.baseline_model(tin_lstm_units, n_timesteps)
+        model_2 = lstmn.baseline_model(sml_lstm_units, n_timesteps)
+        model_3 = lstmn.baseline_model(med_lstm_units, n_timesteps)
+        model_4 = lstmn.baseline_model(lrg_lstm_units, n_timesteps)
+        model_5 = lstmn.baseline_model(hug_lstm_units, n_timesteps)
+
+        # Max Voting
+        # Split validation set from the training set
+        X_1_train, X_1_val, y_1_train, y_1_val = train_test_split(X_1_train, y_1_train, test_size=lstmn.VAL_SPLIT)
+        X_2_train, X_2_val, y_2_train, y_2_val = train_test_split(X_2_train, y_2_train, test_size=lstmn.VAL_SPLIT)
+        X_3_train, X_3_val, y_3_train, y_3_val = train_test_split(X_3_train, y_3_train, test_size=lstmn.VAL_SPLIT)
+        X_4_train, X_4_val, y_4_train, y_4_val = train_test_split(X_4_train, y_4_train, test_size=lstmn.VAL_SPLIT)
+        X_5_train, X_5_val, y_5_train, y_5_val = train_test_split(X_5_train, y_5_train, test_size=lstmn.VAL_SPLIT)
+        print('Tiny Model', tin_lstm_units, 'units')
+        print("X_train:", X_1_train.shape)
+        model_1.fit(X_1_train, y_1_train,
+                    validation_data=(X_1_val, y_1_val),
+                    epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
+
+        print('Small Model', sml_lstm_units, 'units')
+        print("X_train:", X_2_train.shape)
+        model_2.fit(X_2_train, y_2_train,
+                    validation_data=(X_2_val, y_2_val),
+                    epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
+
+        print('Medium Model', med_lstm_units, 'units')
+        print("X_train:", X_3_train.shape)
+        model_3.fit(X_3_train, y_3_train,
+                    validation_data=(X_3_val, y_3_val),
+                    epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
+
+        print('Large Model', lrg_lstm_units, 'units')
+        print("X_train:", X_4_train.shape)
+        model_4.fit(X_4_train, y_4_train,
+                    validation_data=(X_4_val, y_4_val),
+                    epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
+
+        print('Huge Model', hug_lstm_units, 'units')
+        print("X_train:", X_5_train.shape)
+        model_5.fit(X_5_train, y_5_train,
+                    validation_data=(X_5_val, y_5_val),
+                    epochs=lstmn.NUM_EPOCH, batch_size=lstmn.BATCH_SIZE, verbose=2)
+
+        model_1_pred = model_1.predict(X_1_test, batch_size=lstmn.BATCH_SIZE)
+        model_2_pred = model_2.predict(X_2_test, batch_size=lstmn.BATCH_SIZE)
+        model_3_pred = model_3.predict(X_3_test, batch_size=lstmn.BATCH_SIZE)
+        model_4_pred = model_4.predict(X_4_test, batch_size=lstmn.BATCH_SIZE)
+        model_5_pred = model_5.predict(X_5_test, batch_size=lstmn.BATCH_SIZE)
+        #
+        # classify output predictions
+        if lstmn.NUM_CLASS == 2:
+            model_1_pred = (model_1_pred > 0.5)
+            model_2_pred = (model_2_pred > 0.5)
+            model_3_pred = (model_3_pred > 0.5)
+            model_4_pred = (model_4_pred > 0.5)
+            model_5_pred = (model_5_pred > 0.5)
+        elif lstmn.NUM_CLASS == 4:
+            # Tiny Prediction
+            y_ohe = model_1_pred
+            model_1_pred = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                model_1_pred.append(mx_i)
+            # Small Prediction
+            y_ohe = model_2_pred
+            model_2_pred = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                model_2_pred.append(mx_i)
+            # Medium Prediction
+            y_ohe = model_3_pred
+            model_3_pred = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                model_3_pred.append(mx_i)
+            # Large Prediction
+            y_ohe = model_4_pred
+            model_4_pred = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                model_4_pred.append(mx_i)
+            # Huge Prediction
+            y_ohe = model_5_pred
+            model_5_pred = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                model_5_pred.append(mx_i)
+            # Actual
+            y_ohe = y_test
+            y_test = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                y_test.append(mx_i)
+
+        print("y_test:     ", y_test)
+        print("Tiny   pred:", model_1_pred)
+        print("Small  pred:", model_2_pred)
+        print("Medium pred:", model_3_pred)
+        print("Large  pred:", model_4_pred)
+        print("Huge   pred:", model_5_pred)
+
+        final_pred = np.array([])
+        for i in range(0, len(X_test)):
+            max_vote = mode([model_1_pred[i],
+                             model_2_pred[i],
+                             model_3_pred[i],
+                             model_4_pred[i],
+                             model_5_pred[i]])
+            final_pred = np.append(final_pred, max_vote[0])
+
+
+        print("final_pred: ", final_pred)
+
+        # confusion matrix
+        cm = confusion_matrix(y_test, final_pred)
+        if cm_sum is None:
+            cm_sum = cm
+        else:
+            cm_sum += cm
+
+        score = 0
+        sum = 0
+        for r in range(cm.shape[0]):
+            for c in range(cm.shape[1]):
+                sum += cm[r, c]
+                if r == c:
+                    score += cm[r, c]
+        score = score * 100 / sum
+        print("score: %.2f%%" % score)
+        cvscores.append(score)
+
+    print("\nCross Fold Classification Accuracy:\n%.2f%% (+/- %.2f%%)" % (np.mean(cvscores), np.std(cvscores)))
+
+    # Plot non-normalized confusion matrix
+    plt.figure()
+    lstmn.plot_confusion_matrix(cm_sum, classes=class_names, title='Confusion matrix, without normalization')
+
+    # Time End
+    elapsed_time = time.time()
+    hours, rem = divmod(elapsed_time - start_time, 3600)
+    minutes, seconds = divmod(rem, 60)
+    print("Elapsed Time: {:0>2}:{:0>2}:{:05.2f}".format(int(hours), int(minutes), seconds))
+
+    plt.show()
+
+
+
+/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/venv/bin/python3.5 /media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/python/src/ML.py
+Using TensorFlow backend.
+Loading: label | file
+1 | als1.tsv
+1 | als2.tsv
+1 | als3.tsv
+1 | als4.tsv
+1 | als5.tsv
+1 | als6.tsv
+1 | als7.tsv
+1 | als8.tsv
+0 | control1.tsv
+0 | control14.tsv
+0 | control15.tsv
+0 | control16.tsv
+0 | control2.tsv
+0 | control3.tsv
+0 | control4.tsv
+0 | control5.tsv
+0 | control6.tsv
+0 | control7.tsv
+~ | file_index.txt
+2 | hunt1.tsv
+2 | hunt14.tsv
+2 | hunt15.tsv
+2 | hunt16.tsv
+2 | hunt17.tsv
+2 | hunt18.tsv
+2 | hunt19.tsv
+2 | hunt2.tsv
+2 | hunt20.tsv
+2 | hunt3.tsv
+2 | hunt4.tsv
+2 | hunt5.tsv
+2 | hunt6.tsv
+2 | hunt7.tsv
+2 | hunt8.tsv
+3 | park1.tsv
+3 | park14.tsv
+3 | park15.tsv
+3 | park2.tsv
+3 | park3.tsv
+3 | park4.tsv
+3 | park5.tsv
+3 | park6.tsv
+3 | park7.tsv
+3 | park8.tsv
+0 | control8.tsv
+X_total = (44, 14000, 20)
+y_total =  [1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0]
+Number Classes: 4
+Cropped Time Series Length: 14000
+Number Features: 20
+
+CV Fold 1/5
+TRAIN/VAL: 34 [0, 1, 3, 4, 5, 6, 8, 10, 11, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 39, 40, 41, 42]
+TEST: 10 [2, 7, 9, 12, 18, 25, 26, 33, 38, 43]
+Bootstrap Sample Set:
+Tiny   | train: (102, 14000, 20) test: (10, 14000, 20)
+Small  | train: (102, 14000, 20) test: (10, 14000, 20)
+Medium | train: (102, 14000, 20) test: (10, 14000, 20)
+Large  | train: (102, 14000, 20) test: (10, 14000, 20)
+Huge   | train: (102, 14000, 20) test: (10, 14000, 20)
+Tiny Model 2 units
+X_train: (71, 14000, 20)
+Train on 71 samples, validate on 31 samples
+Epoch 1/20
+ - 15s - loss: 1.4055 - acc: 0.1972 - val_loss: 1.4202 - val_acc: 0.1613
+Epoch 2/20
+ - 14s - loss: 1.4041 - acc: 0.1972 - val_loss: 1.4186 - val_acc: 0.1613
+Epoch 3/20
+ - 14s - loss: 1.3996 - acc: 0.2113 - val_loss: 1.4170 - val_acc: 0.1613
+Epoch 4/20
+ - 15s - loss: 1.4014 - acc: 0.1972 - val_loss: 1.4155 - val_acc: 0.1613
+Epoch 5/20
+ - 13s - loss: 1.3984 - acc: 0.1972 - val_loss: 1.4141 - val_acc: 0.1613
+Epoch 6/20
+ - 13s - loss: 1.3983 - acc: 0.1972 - val_loss: 1.4128 - val_acc: 0.1613
+Epoch 7/20
+ - 15s - loss: 1.3946 - acc: 0.2535 - val_loss: 1.4115 - val_acc: 0.1613
+Epoch 8/20
+ - 14s - loss: 1.3998 - acc: 0.1831 - val_loss: 1.4102 - val_acc: 0.1613
+Epoch 9/20
+ - 15s - loss: 1.3959 - acc: 0.2254 - val_loss: 1.4090 - val_acc: 0.1613
+Epoch 10/20
+ - 14s - loss: 1.3961 - acc: 0.1972 - val_loss: 1.4078 - val_acc: 0.1613
+Epoch 11/20
+ - 14s - loss: 1.3979 - acc: 0.2113 - val_loss: 1.4067 - val_acc: 0.1613
+Epoch 12/20
+ - 15s - loss: 1.3909 - acc: 0.2535 - val_loss: 1.4056 - val_acc: 0.1613
+Epoch 13/20
+ - 14s - loss: 1.3930 - acc: 0.2113 - val_loss: 1.4045 - val_acc: 0.1613
+Epoch 14/20
+ - 15s - loss: 1.3934 - acc: 0.1972 - val_loss: 1.4034 - val_acc: 0.1613
+Epoch 15/20
+ - 15s - loss: 1.3893 - acc: 0.2394 - val_loss: 1.4024 - val_acc: 0.1613
+Epoch 16/20
+ - 15s - loss: 1.3844 - acc: 0.2817 - val_loss: 1.4014 - val_acc: 0.0968
+Epoch 17/20
+ - 14s - loss: 1.3906 - acc: 0.1972 - val_loss: 1.4004 - val_acc: 0.0968
+Epoch 18/20
+ - 14s - loss: 1.3893 - acc: 0.1831 - val_loss: 1.3995 - val_acc: 0.1290
+Epoch 19/20
+ - 14s - loss: 1.3919 - acc: 0.1408 - val_loss: 1.3985 - val_acc: 0.1290
+Epoch 20/20
+ - 15s - loss: 1.3868 - acc: 0.2535 - val_loss: 1.3976 - val_acc: 0.1613
+Small Model 10 units
+X_train: (71, 14000, 20)
+Train on 71 samples, validate on 31 samples
+Epoch 1/20
+ - 16s - loss: 1.3800 - acc: 0.2535 - val_loss: 1.4014 - val_acc: 0.2581
+Epoch 2/20
+ - 13s - loss: 1.3786 - acc: 0.3380 - val_loss: 1.4037 - val_acc: 0.2581
+Epoch 3/20
+ - 14s - loss: 1.3832 - acc: 0.2817 - val_loss: 1.4057 - val_acc: 0.2581
+Epoch 4/20
+ - 14s - loss: 1.3899 - acc: 0.2817 - val_loss: 1.4071 - val_acc: 0.2903
+Epoch 5/20
+ - 14s - loss: 1.3912 - acc: 0.3099 - val_loss: 1.4083 - val_acc: 0.3226
+Epoch 6/20
+ - 14s - loss: 1.3929 - acc: 0.2958 - val_loss: 1.4089 - val_acc: 0.3226
+Epoch 7/20
+ - 14s - loss: 1.3722 - acc: 0.3521 - val_loss: 1.4095 - val_acc: 0.3226
+Epoch 8/20
+ - 14s - loss: 1.3756 - acc: 0.3521 - val_loss: 1.4099 - val_acc: 0.3226
+Epoch 9/20
+ - 14s - loss: 1.3601 - acc: 0.3944 - val_loss: 1.4104 - val_acc: 0.3226
+Epoch 10/20
+ - 15s - loss: 1.3702 - acc: 0.3239 - val_loss: 1.4108 - val_acc: 0.3226
+Epoch 11/20
+ - 14s - loss: 1.3693 - acc: 0.3662 - val_loss: 1.4111 - val_acc: 0.3226
+Epoch 12/20
+ - 15s - loss: 1.3677 - acc: 0.3521 - val_loss: 1.4114 - val_acc: 0.3226
+Epoch 13/20
+ - 14s - loss: 1.3668 - acc: 0.3521 - val_loss: 1.4116 - val_acc: 0.3226
+Epoch 14/20
+ - 15s - loss: 1.3827 - acc: 0.3380 - val_loss: 1.4120 - val_acc: 0.3226
+Epoch 15/20
+ - 15s - loss: 1.3711 - acc: 0.3521 - val_loss: 1.4123 - val_acc: 0.3226
+Epoch 16/20
+ - 15s - loss: 1.3720 - acc: 0.3662 - val_loss: 1.4125 - val_acc: 0.3226
+Epoch 17/20
+ - 14s - loss: 1.3704 - acc: 0.3662 - val_loss: 1.4126 - val_acc: 0.3226
+Epoch 18/20
+ - 14s - loss: 1.3608 - acc: 0.3803 - val_loss: 1.4127 - val_acc: 0.3226
+Epoch 19/20
+ - 15s - loss: 1.3664 - acc: 0.3662 - val_loss: 1.4128 - val_acc: 0.3226
+Epoch 20/20
+ - 15s - loss: 1.3664 - acc: 0.3662 - val_loss: 1.4129 - val_acc: 0.3226
+Medium Model 25 units
+X_train: (71, 14000, 20)
+Train on 71 samples, validate on 31 samples
+Epoch 1/20
+ - 16s - loss: 1.3833 - acc: 0.3099 - val_loss: 1.3929 - val_acc: 0.2581
+Epoch 2/20
+ - 14s - loss: 1.3664 - acc: 0.3380 - val_loss: 1.3900 - val_acc: 0.1613
+Epoch 3/20
+ - 14s - loss: 1.3456 - acc: 0.3662 - val_loss: 1.3889 - val_acc: 0.3548
+Epoch 4/20
+ - 15s - loss: 1.3494 - acc: 0.3521 - val_loss: 1.3892 - val_acc: 0.2903
+Epoch 5/20
+ - 14s - loss: 1.3446 - acc: 0.3944 - val_loss: 1.3910 - val_acc: 0.2581
+Epoch 6/20
+ - 14s - loss: 1.3452 - acc: 0.3662 - val_loss: 1.3939 - val_acc: 0.2581
+Epoch 7/20
+ - 14s - loss: 1.3430 - acc: 0.3662 - val_loss: 1.3974 - val_acc: 0.2581
+Epoch 8/20
+ - 14s - loss: 1.3215 - acc: 0.3944 - val_loss: 1.4010 - val_acc: 0.2581
+Epoch 9/20
+ - 14s - loss: 1.3114 - acc: 0.3944 - val_loss: 1.4046 - val_acc: 0.2581
+Epoch 10/20
+ - 14s - loss: 1.3227 - acc: 0.3944 - val_loss: 1.4077 - val_acc: 0.2581
+Epoch 11/20
+ - 14s - loss: 1.3226 - acc: 0.3944 - val_loss: 1.4107 - val_acc: 0.2581
+Epoch 12/20
+ - 14s - loss: 1.3284 - acc: 0.3944 - val_loss: 1.4132 - val_acc: 0.2581
+Epoch 13/20
+ - 14s - loss: 1.3216 - acc: 0.3944 - val_loss: 1.4152 - val_acc: 0.2581
+Epoch 14/20
+ - 14s - loss: 1.3307 - acc: 0.3944 - val_loss: 1.4166 - val_acc: 0.2581
+Epoch 15/20
+ - 14s - loss: 1.3169 - acc: 0.3944 - val_loss: 1.4173 - val_acc: 0.2581
+Epoch 16/20
+ - 14s - loss: 1.3259 - acc: 0.3944 - val_loss: 1.4172 - val_acc: 0.2581
+Epoch 17/20
+ - 14s - loss: 1.3233 - acc: 0.3944 - val_loss: 1.4168 - val_acc: 0.2581
+Epoch 18/20
+ - 15s - loss: 1.3145 - acc: 0.3944 - val_loss: 1.4159 - val_acc: 0.2581
+Epoch 19/20
+ - 14s - loss: 1.3085 - acc: 0.3944 - val_loss: 1.4149 - val_acc: 0.2581
+Epoch 20/20
+ - 14s - loss: 1.3069 - acc: 0.3944 - val_loss: 1.4137 - val_acc: 0.2581
+Large Model 50 units
+X_train: (71, 14000, 20)
+Train on 71 samples, validate on 31 samples
+Epoch 1/20
+ - 16s - loss: 1.3980 - acc: 0.1408 - val_loss: 1.3857 - val_acc: 0.2581
+Epoch 2/20
+ - 14s - loss: 1.3892 - acc: 0.2254 - val_loss: 1.3814 - val_acc: 0.3548
+Epoch 3/20
+ - 14s - loss: 1.3663 - acc: 0.1972 - val_loss: 1.3782 - val_acc: 0.2581
+Epoch 4/20
+ - 14s - loss: 1.3676 - acc: 0.2817 - val_loss: 1.3762 - val_acc: 0.3871
+Epoch 5/20
+ - 14s - loss: 1.3613 - acc: 0.3380 - val_loss: 1.3755 - val_acc: 0.3548
+Epoch 6/20
+ - 14s - loss: 1.3557 - acc: 0.4085 - val_loss: 1.3755 - val_acc: 0.4194
+Epoch 7/20
+ - 14s - loss: 1.3452 - acc: 0.3944 - val_loss: 1.3756 - val_acc: 0.3548
+Epoch 8/20
+ - 14s - loss: 1.3315 - acc: 0.3803 - val_loss: 1.3755 - val_acc: 0.3226
+Epoch 9/20
+ - 14s - loss: 1.3415 - acc: 0.3099 - val_loss: 1.3754 - val_acc: 0.2903
+Epoch 10/20
+ - 14s - loss: 1.3233 - acc: 0.3944 - val_loss: 1.3749 - val_acc: 0.2903
+Epoch 11/20
+ - 15s - loss: 1.3252 - acc: 0.3380 - val_loss: 1.3739 - val_acc: 0.2258
+Epoch 12/20
+ - 14s - loss: 1.3080 - acc: 0.3944 - val_loss: 1.3723 - val_acc: 0.2258
+Epoch 13/20
+ - 14s - loss: 1.2998 - acc: 0.4225 - val_loss: 1.3699 - val_acc: 0.2258
+Epoch 14/20
+ - 14s - loss: 1.2985 - acc: 0.4366 - val_loss: 1.3660 - val_acc: 0.2581
+Epoch 15/20
+ - 14s - loss: 1.3038 - acc: 0.3803 - val_loss: 1.3616 - val_acc: 0.2581
+Epoch 16/20
+ - 15s - loss: 1.2790 - acc: 0.3803 - val_loss: 1.3553 - val_acc: 0.2903
+Epoch 17/20
+ - 14s - loss: 1.2866 - acc: 0.3803 - val_loss: 1.3480 - val_acc: 0.2581
+Epoch 18/20
+ - 14s - loss: 1.2877 - acc: 0.3521 - val_loss: 1.3380 - val_acc: 0.2581
+Epoch 19/20
+ - 14s - loss: 1.2920 - acc: 0.4366 - val_loss: 1.3244 - val_acc: 0.1290
+Epoch 20/20
+ - 14s - loss: 1.2632 - acc: 0.3662 - val_loss: 1.3191 - val_acc: 0.1613
+Huge Model 100 units
+X_train: (71, 14000, 20)
+Train on 71 samples, validate on 31 samples
+Epoch 1/20
+ - 18s - loss: 1.3882 - acc: 0.2958 - val_loss: 1.4120 - val_acc: 0.2258
+Epoch 2/20
+ - 16s - loss: 1.3443 - acc: 0.3944 - val_loss: 1.4351 - val_acc: 0.2258
+Epoch 3/20
+ - 16s - loss: 1.3334 - acc: 0.4085 - val_loss: 1.4522 - val_acc: 0.2258
+Epoch 4/20
+ - 16s - loss: 1.3208 - acc: 0.4085 - val_loss: 1.4585 - val_acc: 0.2258
+Epoch 5/20
+ - 16s - loss: 1.3152 - acc: 0.4085 - val_loss: 1.4593 - val_acc: 0.2258
+Epoch 6/20
+ - 16s - loss: 1.3176 - acc: 0.4085 - val_loss: 1.4588 - val_acc: 0.2258
+Epoch 7/20
+ - 16s - loss: 1.3100 - acc: 0.4085 - val_loss: 1.4579 - val_acc: 0.2258
+Epoch 8/20
+ - 16s - loss: 1.3112 - acc: 0.4085 - val_loss: 1.4567 - val_acc: 0.2258
+Epoch 9/20
+ - 16s - loss: 1.3171 - acc: 0.4085 - val_loss: 1.4555 - val_acc: 0.2258
+Epoch 10/20
+ - 16s - loss: 1.3045 - acc: 0.4085 - val_loss: 1.4552 - val_acc: 0.2258
+Epoch 11/20
+ - 16s - loss: 1.3090 - acc: 0.4085 - val_loss: 1.4544 - val_acc: 0.2258
+Epoch 12/20
+ - 16s - loss: 1.3051 - acc: 0.4085 - val_loss: 1.4549 - val_acc: 0.2258
+Epoch 13/20
+ - 16s - loss: 1.2960 - acc: 0.4085 - val_loss: 1.4581 - val_acc: 0.2258
+Epoch 14/20
+ - 16s - loss: 1.2893 - acc: 0.4085 - val_loss: 1.4624 - val_acc: 0.2258
+Epoch 15/20
+ - 16s - loss: 1.2989 - acc: 0.4085 - val_loss: 1.4638 - val_acc: 0.2258
+Epoch 16/20
+ - 16s - loss: 1.2742 - acc: 0.4085 - val_loss: 1.4639 - val_acc: 0.2258
+Epoch 17/20
+ - 16s - loss: 1.2946 - acc: 0.4085 - val_loss: 1.4559 - val_acc: 0.2258
+Epoch 18/20
+ - 16s - loss: 1.2766 - acc: 0.4085 - val_loss: 1.4408 - val_acc: 0.2258
+Epoch 19/20
+ - 16s - loss: 1.2754 - acc: 0.4085 - val_loss: 1.4237 - val_acc: 0.2258
+Epoch 20/20
+ - 16s - loss: 1.2733 - acc: 0.4366 - val_loss: 1.4126 - val_acc: 0.2903
+y_test:      [1, 1, 0, 0, 2, 2, 2, 3, 3, 0]
+Tiny   pred: [1, 0, 1, 1, 0, 1, 1, 1, 1, 0]
+Small  pred: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+Medium pred: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+Large  pred: [2, 3, 1, 2, 2, 2, 2, 2, 2, 2]
+Huge   pred: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+final_pred:  [2. 2. 2. 2. 2. 2. 2. 2. 2. 2.]
+score: 30.00%
+
+CV Fold 2/5
+TRAIN/VAL: 35 [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 24, 25, 26, 28, 29, 30, 32, 33, 35, 36, 37, 38, 39, 40, 41, 43]
+TEST: 9 [0, 1, 11, 17, 23, 27, 31, 34, 42]
+Bootstrap Sample Set:
+Tiny   | train: (105, 14000, 20) test: (9, 14000, 20)
+Small  | train: (105, 14000, 20) test: (9, 14000, 20)
+Medium | train: (105, 14000, 20) test: (9, 14000, 20)
+Large  | train: (105, 14000, 20) test: (9, 14000, 20)
+Huge   | train: (105, 14000, 20) test: (9, 14000, 20)
+Tiny Model 2 units
+X_train: (73, 14000, 20)
+Train on 73 samples, validate on 32 samples
+Epoch 1/20
+ - 17s - loss: 1.3750 - acc: 0.3425 - val_loss: 1.3722 - val_acc: 0.3438
+Epoch 2/20
+ - 15s - loss: 1.3723 - acc: 0.3699 - val_loss: 1.3710 - val_acc: 0.3438
+Epoch 3/20
+ - 14s - loss: 1.3714 - acc: 0.3699 - val_loss: 1.3698 - val_acc: 0.3438
+Epoch 4/20
+ - 14s - loss: 1.3681 - acc: 0.3425 - val_loss: 1.3686 - val_acc: 0.3438
+Epoch 5/20
+ - 15s - loss: 1.3617 - acc: 0.3562 - val_loss: 1.3674 - val_acc: 0.3438
+Epoch 6/20
+ - 15s - loss: 1.3709 - acc: 0.3562 - val_loss: 1.3661 - val_acc: 0.3438
+Epoch 7/20
+ - 14s - loss: 1.3653 - acc: 0.3425 - val_loss: 1.3647 - val_acc: 0.3438
+Epoch 8/20
+ - 15s - loss: 1.3584 - acc: 0.3425 - val_loss: 1.3634 - val_acc: 0.3438
+Epoch 9/20
+ - 15s - loss: 1.3632 - acc: 0.3562 - val_loss: 1.3619 - val_acc: 0.3438
+Epoch 10/20
+ - 15s - loss: 1.3657 - acc: 0.3562 - val_loss: 1.3605 - val_acc: 0.3438
+Epoch 11/20
+ - 15s - loss: 1.3643 - acc: 0.3562 - val_loss: 1.3589 - val_acc: 0.3438
+Epoch 12/20
+ - 15s - loss: 1.3565 - acc: 0.3425 - val_loss: 1.3574 - val_acc: 0.3438
+Epoch 13/20
+ - 15s - loss: 1.3521 - acc: 0.3562 - val_loss: 1.3557 - val_acc: 0.3438
+Epoch 14/20
+ - 15s - loss: 1.3614 - acc: 0.3562 - val_loss: 1.3541 - val_acc: 0.3438
+Epoch 15/20
+ - 15s - loss: 1.3506 - acc: 0.3562 - val_loss: 1.3525 - val_acc: 0.3438
+Epoch 16/20
+ - 15s - loss: 1.3605 - acc: 0.3562 - val_loss: 1.3510 - val_acc: 0.3438
+Epoch 17/20
+ - 15s - loss: 1.3579 - acc: 0.3562 - val_loss: 1.3493 - val_acc: 0.3438
+Epoch 18/20
+ - 15s - loss: 1.3469 - acc: 0.3562 - val_loss: 1.3477 - val_acc: 0.3438
+Epoch 19/20
+ - 15s - loss: 1.3491 - acc: 0.3562 - val_loss: 1.3460 - val_acc: 0.3438
+Epoch 20/20
+ - 15s - loss: 1.3494 - acc: 0.3699 - val_loss: 1.3442 - val_acc: 0.3438
+Small Model 10 units
+X_train: (73, 14000, 20)
+Train on 73 samples, validate on 32 samples
+Epoch 1/20
+ - 18s - loss: 1.4093 - acc: 0.2603 - val_loss: 1.4118 - val_acc: 0.1875
+Epoch 2/20
+ - 15s - loss: 1.3929 - acc: 0.2603 - val_loss: 1.4068 - val_acc: 0.1562
+Epoch 3/20
+ - 14s - loss: 1.3926 - acc: 0.2740 - val_loss: 1.4021 - val_acc: 0.1562
+Epoch 4/20
+ - 15s - loss: 1.3779 - acc: 0.2877 - val_loss: 1.3977 - val_acc: 0.1562
+Epoch 5/20
+ - 15s - loss: 1.3720 - acc: 0.2877 - val_loss: 1.3939 - val_acc: 0.1562
+Epoch 6/20
+ - 15s - loss: 1.3599 - acc: 0.2877 - val_loss: 1.3905 - val_acc: 0.1562
+Epoch 7/20
+ - 15s - loss: 1.3656 - acc: 0.3014 - val_loss: 1.3876 - val_acc: 0.1562
+Epoch 8/20
+ - 15s - loss: 1.3430 - acc: 0.3288 - val_loss: 1.3849 - val_acc: 0.2812
+Epoch 9/20
+ - 15s - loss: 1.3447 - acc: 0.3425 - val_loss: 1.3823 - val_acc: 0.3125
+Epoch 10/20
+ - 15s - loss: 1.3570 - acc: 0.3699 - val_loss: 1.3801 - val_acc: 0.4688
+Epoch 11/20
+ - 15s - loss: 1.3354 - acc: 0.4384 - val_loss: 1.3780 - val_acc: 0.4688
+Epoch 12/20
+ - 15s - loss: 1.3486 - acc: 0.3151 - val_loss: 1.3764 - val_acc: 0.5000
+Epoch 13/20
+ - 15s - loss: 1.3394 - acc: 0.3562 - val_loss: 1.3749 - val_acc: 0.5000
+Epoch 14/20
+ - 15s - loss: 1.3170 - acc: 0.4521 - val_loss: 1.3735 - val_acc: 0.5000
+Epoch 15/20
+ - 15s - loss: 1.3282 - acc: 0.3699 - val_loss: 1.3723 - val_acc: 0.4375
+Epoch 16/20
+ - 14s - loss: 1.3287 - acc: 0.2603 - val_loss: 1.3712 - val_acc: 0.3750
+Epoch 17/20
+ - 15s - loss: 1.3264 - acc: 0.3699 - val_loss: 1.3703 - val_acc: 0.3750
+Epoch 18/20
+ - 15s - loss: 1.3351 - acc: 0.3288 - val_loss: 1.3694 - val_acc: 0.3750
+Epoch 19/20
+ - 15s - loss: 1.3384 - acc: 0.3288 - val_loss: 1.3685 - val_acc: 0.3125
+Epoch 20/20
+ - 15s - loss: 1.3218 - acc: 0.4110 - val_loss: 1.3677 - val_acc: 0.3125
+Medium Model 25 units
+X_train: (73, 14000, 20)
+Train on 73 samples, validate on 32 samples
+Epoch 1/20
+ - 17s - loss: 1.3442 - acc: 0.3288 - val_loss: 1.3569 - val_acc: 0.2188
+Epoch 2/20
+ - 14s - loss: 1.3518 - acc: 0.3562 - val_loss: 1.3456 - val_acc: 0.3750
+Epoch 3/20
+ - 14s - loss: 1.3478 - acc: 0.3425 - val_loss: 1.3372 - val_acc: 0.3750
+Epoch 4/20
+ - 15s - loss: 1.3336 - acc: 0.3562 - val_loss: 1.3319 - val_acc: 0.3750
+Epoch 5/20
+ - 14s - loss: 1.3204 - acc: 0.4247 - val_loss: 1.3291 - val_acc: 0.3750
+Epoch 6/20
+ - 14s - loss: 1.3186 - acc: 0.4110 - val_loss: 1.3279 - val_acc: 0.3750
+Epoch 7/20
+ - 14s - loss: 1.3088 - acc: 0.3973 - val_loss: 1.3271 - val_acc: 0.3750
+Epoch 8/20
+ - 14s - loss: 1.3312 - acc: 0.3562 - val_loss: 1.3265 - val_acc: 0.3750
+Epoch 9/20
+ - 14s - loss: 1.3118 - acc: 0.3836 - val_loss: 1.3254 - val_acc: 0.3750
+Epoch 10/20
+ - 14s - loss: 1.3020 - acc: 0.4384 - val_loss: 1.3237 - val_acc: 0.3750
+Epoch 11/20
+ - 14s - loss: 1.2954 - acc: 0.4384 - val_loss: 1.3213 - val_acc: 0.3750
+Epoch 12/20
+ - 14s - loss: 1.2892 - acc: 0.4658 - val_loss: 1.3184 - val_acc: 0.3750
+Epoch 13/20
+ - 14s - loss: 1.2876 - acc: 0.4110 - val_loss: 1.3153 - val_acc: 0.3750
+Epoch 14/20
+ - 14s - loss: 1.2887 - acc: 0.4521 - val_loss: 1.3122 - val_acc: 0.3750
+Epoch 15/20
+ - 14s - loss: 1.3039 - acc: 0.4110 - val_loss: 1.3092 - val_acc: 0.3750
+Epoch 16/20
+ - 16s - loss: 1.2925 - acc: 0.4110 - val_loss: 1.3067 - val_acc: 0.3750
+Epoch 17/20
+ - 14s - loss: 1.2745 - acc: 0.4658 - val_loss: 1.3046 - val_acc: 0.3750
+Epoch 18/20
+ - 14s - loss: 1.2921 - acc: 0.4658 - val_loss: 1.3030 - val_acc: 0.3750
+Epoch 19/20
+ - 14s - loss: 1.2526 - acc: 0.4521 - val_loss: 1.3021 - val_acc: 0.3750
+Epoch 20/20
+ - 14s - loss: 1.2813 - acc: 0.3973 - val_loss: 1.3018 - val_acc: 0.3750
+Large Model 50 units
+X_train: (73, 14000, 20)
+Train on 73 samples, validate on 32 samples
+Epoch 1/20
+ - 18s - loss: 1.4208 - acc: 0.1781 - val_loss: 1.3890 - val_acc: 0.3438
+Epoch 2/20
+ - 14s - loss: 1.4068 - acc: 0.1507 - val_loss: 1.3803 - val_acc: 0.2188
+Epoch 3/20
+ - 15s - loss: 1.3925 - acc: 0.2740 - val_loss: 1.3758 - val_acc: 0.1875
+Epoch 4/20
+ - 15s - loss: 1.3767 - acc: 0.2192 - val_loss: 1.3748 - val_acc: 0.2188
+Epoch 5/20
+ - 14s - loss: 1.3800 - acc: 0.2466 - val_loss: 1.3760 - val_acc: 0.2188
+Epoch 6/20
+ - 15s - loss: 1.3789 - acc: 0.2740 - val_loss: 1.3781 - val_acc: 0.2188
+Epoch 7/20
+ - 14s - loss: 1.3787 - acc: 0.2740 - val_loss: 1.3804 - val_acc: 0.2188
+Epoch 8/20
+ - 15s - loss: 1.3677 - acc: 0.2740 - val_loss: 1.3824 - val_acc: 0.2188
+Epoch 9/20
+ - 15s - loss: 1.3680 - acc: 0.2740 - val_loss: 1.3841 - val_acc: 0.2188
+Epoch 10/20
+ - 15s - loss: 1.3666 - acc: 0.2877 - val_loss: 1.3856 - val_acc: 0.2188
+Epoch 11/20
+ - 15s - loss: 1.3606 - acc: 0.2877 - val_loss: 1.3866 - val_acc: 0.2188
+Epoch 12/20
+ - 15s - loss: 1.3490 - acc: 0.3014 - val_loss: 1.3872 - val_acc: 0.2188
+Epoch 13/20
+ - 15s - loss: 1.3498 - acc: 0.3014 - val_loss: 1.3873 - val_acc: 0.2188
+Epoch 14/20
+ - 15s - loss: 1.3506 - acc: 0.3288 - val_loss: 1.3870 - val_acc: 0.2188
+Epoch 15/20
+ - 14s - loss: 1.3480 - acc: 0.3562 - val_loss: 1.3862 - val_acc: 0.2188
+Epoch 16/20
+ - 15s - loss: 1.3493 - acc: 0.3288 - val_loss: 1.3848 - val_acc: 0.2188
+Epoch 17/20
+ - 15s - loss: 1.3348 - acc: 0.3699 - val_loss: 1.3825 - val_acc: 0.2188
+Epoch 18/20
+ - 14s - loss: 1.3452 - acc: 0.3288 - val_loss: 1.3800 - val_acc: 0.2188
+Epoch 19/20
+ - 15s - loss: 1.3499 - acc: 0.3151 - val_loss: 1.3774 - val_acc: 0.2188
+Epoch 20/20
+ - 15s - loss: 1.3196 - acc: 0.3288 - val_loss: 1.3748 - val_acc: 0.2188
+Huge Model 100 units
+X_train: (73, 14000, 20)
+Train on 73 samples, validate on 32 samples
+Epoch 1/20
+ - 20s - loss: 1.4489 - acc: 0.2466 - val_loss: 1.3848 - val_acc: 0.2812
+Epoch 2/20
+ - 16s - loss: 1.3861 - acc: 0.2466 - val_loss: 1.3739 - val_acc: 0.3438
+Epoch 3/20
+ - 16s - loss: 1.3529 - acc: 0.3836 - val_loss: 1.3798 - val_acc: 0.3125
+Epoch 4/20
+ - 16s - loss: 1.3246 - acc: 0.4795 - val_loss: 1.3888 - val_acc: 0.2812
+Epoch 5/20
+ - 18s - loss: 1.3135 - acc: 0.4384 - val_loss: 1.3928 - val_acc: 0.2188
+Epoch 6/20
+ - 16s - loss: 1.3123 - acc: 0.4247 - val_loss: 1.3923 - val_acc: 0.2188
+Epoch 7/20
+ - 16s - loss: 1.3057 - acc: 0.4384 - val_loss: 1.3908 - val_acc: 0.2188
+Epoch 8/20
+ - 17s - loss: 1.2999 - acc: 0.4247 - val_loss: 1.3905 - val_acc: 0.2188
+Epoch 9/20
+ - 17s - loss: 1.2817 - acc: 0.4521 - val_loss: 1.3914 - val_acc: 0.2812
+Epoch 10/20
+ - 17s - loss: 1.2733 - acc: 0.4247 - val_loss: 1.3925 - val_acc: 0.2812
+Epoch 11/20
+ - 16s - loss: 1.2667 - acc: 0.4521 - val_loss: 1.3930 - val_acc: 0.2812
+Epoch 12/20
+ - 16s - loss: 1.2628 - acc: 0.4658 - val_loss: 1.3916 - val_acc: 0.3125
+Epoch 13/20
+ - 16s - loss: 1.2564 - acc: 0.4658 - val_loss: 1.3881 - val_acc: 0.3125
+Epoch 14/20
+ - 17s - loss: 1.2493 - acc: 0.5068 - val_loss: 1.3818 - val_acc: 0.3125
+Epoch 15/20
+ - 16s - loss: 1.2475 - acc: 0.4658 - val_loss: 1.3732 - val_acc: 0.3438
+Epoch 16/20
+ - 17s - loss: 1.2379 - acc: 0.4795 - val_loss: 1.3622 - val_acc: 0.3438
+Epoch 17/20
+ - 16s - loss: 1.2239 - acc: 0.4932 - val_loss: 1.3509 - val_acc: 0.3438
+Epoch 18/20
+ - 16s - loss: 1.2251 - acc: 0.4795 - val_loss: 1.3405 - val_acc: 0.3438
+Epoch 19/20
+ - 16s - loss: 1.2316 - acc: 0.4658 - val_loss: 1.3312 - val_acc: 0.3750
+Epoch 20/20
+ - 16s - loss: 1.2129 - acc: 0.4932 - val_loss: 1.3233 - val_acc: 0.3750
+y_test:      [1, 1, 0, 0, 2, 2, 2, 3, 3]
+Tiny   pred: [2, 2, 2, 2, 2, 2, 2, 2, 2]
+Small  pred: [2, 0, 0, 2, 2, 0, 2, 2, 2]
+Medium pred: [2, 2, 2, 2, 2, 2, 2, 2, 2]
+Large  pred: [0, 0, 0, 0, 0, 0, 0, 0, 0]
+Huge   pred: [2, 2, 2, 2, 0, 2, 2, 2, 2]
+final_pred:  [2. 2. 2. 2. 2. 2. 2. 2. 2.]
+score: 33.33%
+
+CV Fold 3/5
+TRAIN/VAL: 35 [0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 15, 16, 17, 18, 19, 20, 23, 24, 25, 26, 27, 28, 29, 30, 31, 33, 34, 35, 37, 38, 40, 41, 42, 43]
+TEST: 9 [4, 5, 13, 14, 21, 22, 32, 36, 39]
+Bootstrap Sample Set:
+Tiny   | train: (105, 14000, 20) test: (9, 14000, 20)
+Small  | train: (105, 14000, 20) test: (9, 14000, 20)
+Medium | train: (105, 14000, 20) test: (9, 14000, 20)
+Large  | train: (105, 14000, 20) test: (9, 14000, 20)
+Huge   | train: (105, 14000, 20) test: (9, 14000, 20)
+Tiny Model 2 units
+X_train: (73, 14000, 20)
+Train on 73 samples, validate on 32 samples
+Epoch 1/20
+ - 18s - loss: 1.3864 - acc: 0.3014 - val_loss: 1.3916 - val_acc: 0.2500
+Epoch 2/20
+ - 15s - loss: 1.3861 - acc: 0.2877 - val_loss: 1.3910 - val_acc: 0.2500
+Epoch 3/20
+ - 15s - loss: 1.3835 - acc: 0.3014 - val_loss: 1.3906 - val_acc: 0.2500
+Epoch 4/20
+ - 14s - loss: 1.3872 - acc: 0.2740 - val_loss: 1.3901 - val_acc: 0.2500
+Epoch 5/20
+ - 15s - loss: 1.3854 - acc: 0.3014 - val_loss: 1.3896 - val_acc: 0.2500
+Epoch 6/20
+ - 15s - loss: 1.3845 - acc: 0.2877 - val_loss: 1.3890 - val_acc: 0.2500
+Epoch 7/20
+ - 15s - loss: 1.3872 - acc: 0.2877 - val_loss: 1.3885 - val_acc: 0.2500
+Epoch 8/20
+ - 15s - loss: 1.3811 - acc: 0.2877 - val_loss: 1.3880 - val_acc: 0.2500
+Epoch 9/20
+ - 15s - loss: 1.3823 - acc: 0.2877 - val_loss: 1.3875 - val_acc: 0.2500
+Epoch 10/20
+ - 15s - loss: 1.3844 - acc: 0.2877 - val_loss: 1.3869 - val_acc: 0.2500
+Epoch 11/20
+ - 15s - loss: 1.3828 - acc: 0.2877 - val_loss: 1.3864 - val_acc: 0.2500
+Epoch 12/20
+ - 15s - loss: 1.3832 - acc: 0.3014 - val_loss: 1.3859 - val_acc: 0.2500
+Epoch 13/20
+ - 14s - loss: 1.3837 - acc: 0.2877 - val_loss: 1.3854 - val_acc: 0.2500
+Epoch 14/20
+ - 15s - loss: 1.3807 - acc: 0.2877 - val_loss: 1.3849 - val_acc: 0.2500
+Epoch 15/20
+ - 15s - loss: 1.3823 - acc: 0.2877 - val_loss: 1.3844 - val_acc: 0.2500
+Epoch 16/20
+ - 15s - loss: 1.3813 - acc: 0.2877 - val_loss: 1.3839 - val_acc: 0.2500
+Epoch 17/20
+ - 15s - loss: 1.3808 - acc: 0.2877 - val_loss: 1.3834 - val_acc: 0.2500
+Epoch 18/20
+ - 15s - loss: 1.3828 - acc: 0.2877 - val_loss: 1.3829 - val_acc: 0.2500
+Epoch 19/20
+ - 15s - loss: 1.3813 - acc: 0.3014 - val_loss: 1.3824 - val_acc: 0.2500
+Epoch 20/20
+ - 14s - loss: 1.3810 - acc: 0.3151 - val_loss: 1.3819 - val_acc: 0.2500
+Small Model 10 units
+X_train: (73, 14000, 20)
+Train on 73 samples, validate on 32 samples
+Epoch 1/20
+ - 20s - loss: 1.4516 - acc: 0.2329 - val_loss: 1.3706 - val_acc: 0.2812
+Epoch 2/20
+ - 15s - loss: 1.4495 - acc: 0.2877 - val_loss: 1.3685 - val_acc: 0.2812
+Epoch 3/20
+ - 15s - loss: 1.4390 - acc: 0.2740 - val_loss: 1.3668 - val_acc: 0.2812
+Epoch 4/20
+ - 14s - loss: 1.4246 - acc: 0.3014 - val_loss: 1.3655 - val_acc: 0.2812
+Epoch 5/20
+ - 15s - loss: 1.4094 - acc: 0.2740 - val_loss: 1.3648 - val_acc: 0.2812
+Epoch 6/20
+ - 16s - loss: 1.3929 - acc: 0.3014 - val_loss: 1.3645 - val_acc: 0.2812
+Epoch 7/20
+ - 15s - loss: 1.4131 - acc: 0.3014 - val_loss: 1.3647 - val_acc: 0.3438
+Epoch 8/20
+ - 15s - loss: 1.4118 - acc: 0.3014 - val_loss: 1.3653 - val_acc: 0.3438
+Epoch 9/20
+ - 15s - loss: 1.4001 - acc: 0.3425 - val_loss: 1.3661 - val_acc: 0.3438
+Epoch 10/20
+ - 15s - loss: 1.3890 - acc: 0.3151 - val_loss: 1.3672 - val_acc: 0.3438
+Epoch 11/20
+ - 15s - loss: 1.3923 - acc: 0.2877 - val_loss: 1.3683 - val_acc: 0.3438
+Epoch 12/20
+ - 15s - loss: 1.3881 - acc: 0.3562 - val_loss: 1.3695 - val_acc: 0.3438
+Epoch 13/20
+ - 15s - loss: 1.3824 - acc: 0.3151 - val_loss: 1.3708 - val_acc: 0.3438
+Epoch 14/20
+ - 15s - loss: 1.3851 - acc: 0.3151 - val_loss: 1.3722 - val_acc: 0.3438
+Epoch 15/20
+ - 15s - loss: 1.3768 - acc: 0.2740 - val_loss: 1.3736 - val_acc: 0.3438
+Epoch 16/20
+ - 15s - loss: 1.3761 - acc: 0.3562 - val_loss: 1.3750 - val_acc: 0.2812
+Epoch 17/20
+ - 15s - loss: 1.3672 - acc: 0.3836 - val_loss: 1.3764 - val_acc: 0.3125
+Epoch 18/20
+ - 15s - loss: 1.3723 - acc: 0.3562 - val_loss: 1.3778 - val_acc: 0.3125
+Epoch 19/20
+ - 15s - loss: 1.3764 - acc: 0.2877 - val_loss: 1.3792 - val_acc: 0.3125
+Epoch 20/20
+ - 15s - loss: 1.3725 - acc: 0.3425 - val_loss: 1.3806 - val_acc: 0.3125
+Medium Model 25 units
+X_train: (73, 14000, 20)
+Train on 73 samples, validate on 32 samples
+Epoch 1/20
+ - 19s - loss: 1.4467 - acc: 0.3562 - val_loss: 1.4880 - val_acc: 0.2812
+Epoch 2/20
+ - 14s - loss: 1.4149 - acc: 0.3699 - val_loss: 1.4714 - val_acc: 0.2812
+Epoch 3/20
+ - 14s - loss: 1.4207 - acc: 0.3151 - val_loss: 1.4571 - val_acc: 0.2500
+Epoch 4/20
+ - 15s - loss: 1.3944 - acc: 0.3836 - val_loss: 1.4456 - val_acc: 0.2812
+Epoch 5/20
+ - 14s - loss: 1.3723 - acc: 0.3562 - val_loss: 1.4366 - val_acc: 0.3125
+Epoch 6/20
+ - 16s - loss: 1.3876 - acc: 0.3425 - val_loss: 1.4299 - val_acc: 0.2812
+Epoch 7/20
+ - 14s - loss: 1.3784 - acc: 0.4247 - val_loss: 1.4250 - val_acc: 0.2188
+Epoch 8/20
+ - 14s - loss: 1.3563 - acc: 0.3151 - val_loss: 1.4216 - val_acc: 0.2188
+Epoch 9/20
+ - 13s - loss: 1.3592 - acc: 0.2877 - val_loss: 1.4190 - val_acc: 0.2188
+Epoch 10/20
+ - 14s - loss: 1.3699 - acc: 0.3151 - val_loss: 1.4172 - val_acc: 0.1562
+Epoch 11/20
+ - 14s - loss: 1.3625 - acc: 0.3014 - val_loss: 1.4156 - val_acc: 0.1562
+Epoch 12/20
+ - 14s - loss: 1.3731 - acc: 0.2740 - val_loss: 1.4141 - val_acc: 0.1562
+Epoch 13/20
+ - 14s - loss: 1.3529 - acc: 0.3699 - val_loss: 1.4126 - val_acc: 0.1562
+Epoch 14/20
+ - 14s - loss: 1.3597 - acc: 0.3014 - val_loss: 1.4111 - val_acc: 0.1562
+Epoch 15/20
+ - 14s - loss: 1.3456 - acc: 0.4384 - val_loss: 1.4098 - val_acc: 0.2500
+Epoch 16/20
+ - 14s - loss: 1.3470 - acc: 0.3973 - val_loss: 1.4086 - val_acc: 0.2188
+Epoch 17/20
+ - 14s - loss: 1.3575 - acc: 0.3699 - val_loss: 1.4076 - val_acc: 0.2188
+Epoch 18/20
+ - 15s - loss: 1.3512 - acc: 0.3699 - val_loss: 1.4067 - val_acc: 0.2812
+Epoch 19/20
+ - 14s - loss: 1.3534 - acc: 0.4110 - val_loss: 1.4061 - val_acc: 0.2812
+Epoch 20/20
+ - 14s - loss: 1.3498 - acc: 0.4110 - val_loss: 1.4057 - val_acc: 0.3125
+Large Model 50 units
+X_train: (73, 14000, 20)
+Train on 73 samples, validate on 32 samples
+Epoch 1/20
+ - 20s - loss: 1.3886 - acc: 0.3014 - val_loss: 1.3905 - val_acc: 0.0938
+Epoch 2/20
+ - 14s - loss: 1.3789 - acc: 0.3288 - val_loss: 1.3976 - val_acc: 0.0938
+Epoch 3/20
+ - 15s - loss: 1.3793 - acc: 0.2877 - val_loss: 1.4075 - val_acc: 0.3125
+Epoch 4/20
+ - 15s - loss: 1.3677 - acc: 0.3836 - val_loss: 1.4177 - val_acc: 0.2500
+Epoch 5/20
+ - 14s - loss: 1.3670 - acc: 0.3014 - val_loss: 1.4242 - val_acc: 0.2812
+Epoch 6/20
+ - 15s - loss: 1.3556 - acc: 0.3425 - val_loss: 1.4281 - val_acc: 0.2812
+Epoch 7/20
+ - 15s - loss: 1.3620 - acc: 0.3014 - val_loss: 1.4291 - val_acc: 0.2500
+Epoch 8/20
+ - 15s - loss: 1.3531 - acc: 0.3288 - val_loss: 1.4281 - val_acc: 0.2500
+Epoch 9/20
+ - 15s - loss: 1.3498 - acc: 0.3836 - val_loss: 1.4251 - val_acc: 0.2500
+Epoch 10/20
+ - 14s - loss: 1.3496 - acc: 0.3425 - val_loss: 1.4207 - val_acc: 0.2500
+Epoch 11/20
+ - 14s - loss: 1.3384 - acc: 0.4110 - val_loss: 1.4161 - val_acc: 0.3125
+Epoch 12/20
+ - 14s - loss: 1.3397 - acc: 0.3836 - val_loss: 1.4120 - val_acc: 0.2812
+Epoch 13/20
+ - 15s - loss: 1.3355 - acc: 0.4247 - val_loss: 1.4080 - val_acc: 0.2812
+Epoch 14/20
+ - 15s - loss: 1.3265 - acc: 0.4521 - val_loss: 1.4048 - val_acc: 0.2812
+Epoch 15/20
+ - 14s - loss: 1.3416 - acc: 0.3562 - val_loss: 1.4024 - val_acc: 0.2812
+Epoch 16/20
+ - 15s - loss: 1.3149 - acc: 0.4795 - val_loss: 1.4004 - val_acc: 0.2812
+Epoch 17/20
+ - 15s - loss: 1.3302 - acc: 0.3562 - val_loss: 1.3990 - val_acc: 0.2812
+Epoch 18/20
+ - 15s - loss: 1.3240 - acc: 0.4110 - val_loss: 1.3990 - val_acc: 0.2812
+Epoch 19/20
+ - 15s - loss: 1.3084 - acc: 0.5068 - val_loss: 1.3994 - val_acc: 0.2812
+Epoch 20/20
+ - 15s - loss: 1.3042 - acc: 0.5068 - val_loss: 1.3997 - val_acc: 0.2812
+Huge Model 100 units
+X_train: (73, 14000, 20)
+Train on 73 samples, validate on 32 samples
+Epoch 1/20
+ - 34s - loss: 1.3787 - acc: 0.3288 - val_loss: 1.4029 - val_acc: 0.2188
+Epoch 2/20
+ - 17s - loss: 1.3641 - acc: 0.3151 - val_loss: 1.4134 - val_acc: 0.2188
+Epoch 3/20
+ - 16s - loss: 1.3701 - acc: 0.3151 - val_loss: 1.4164 - val_acc: 0.2188
+Epoch 4/20
+ - 22s - loss: 1.3694 - acc: 0.3014 - val_loss: 1.4140 - val_acc: 0.2188
+Epoch 5/20
+ - 17s - loss: 1.3454 - acc: 0.3425 - val_loss: 1.4093 - val_acc: 0.2188
+Epoch 6/20
+ - 16s - loss: 1.3441 - acc: 0.3425 - val_loss: 1.4033 - val_acc: 0.2500
+Epoch 7/20
+ - 16s - loss: 1.3405 - acc: 0.3973 - val_loss: 1.3969 - val_acc: 0.4375
+Epoch 8/20
+ - 16s - loss: 1.3373 - acc: 0.4110 - val_loss: 1.3912 - val_acc: 0.3125
+Epoch 9/20
+ - 17s - loss: 1.3428 - acc: 0.4247 - val_loss: 1.3855 - val_acc: 0.3438
+Epoch 10/20
+ - 17s - loss: 1.3298 - acc: 0.3288 - val_loss: 1.3810 - val_acc: 0.3125
+Epoch 11/20
+ - 17s - loss: 1.3147 - acc: 0.4110 - val_loss: 1.3769 - val_acc: 0.2500
+Epoch 12/20
+ - 16s - loss: 1.3228 - acc: 0.4384 - val_loss: 1.3740 - val_acc: 0.2500
+Epoch 13/20
+ - 17s - loss: 1.3244 - acc: 0.4110 - val_loss: 1.3732 - val_acc: 0.2500
+Epoch 14/20
+ - 17s - loss: 1.3077 - acc: 0.4795 - val_loss: 1.3740 - val_acc: 0.4062
+Epoch 15/20
+ - 17s - loss: 1.3264 - acc: 0.3562 - val_loss: 1.3757 - val_acc: 0.4062
+Epoch 16/20
+ - 16s - loss: 1.2963 - acc: 0.4521 - val_loss: 1.3721 - val_acc: 0.3750
+Epoch 17/20
+ - 16s - loss: 1.2859 - acc: 0.4247 - val_loss: 1.3613 - val_acc: 0.2812
+Epoch 18/20
+ - 18s - loss: 1.2978 - acc: 0.3973 - val_loss: 1.3502 - val_acc: 0.2812
+Epoch 19/20
+ - 16s - loss: 1.2799 - acc: 0.4247 - val_loss: 1.3441 - val_acc: 0.3438
+Epoch 20/20
+ - 17s - loss: 1.2873 - acc: 0.4795 - val_loss: 1.3420 - val_acc: 0.3750
+y_test:      [1, 1, 0, 0, 2, 2, 2, 3, 3]
+Tiny   pred: [0, 0, 0, 0, 0, 0, 0, 0, 0]
+Small  pred: [0, 2, 2, 0, 2, 2, 2, 2, 0]
+Medium pred: [1, 1, 1, 2, 2, 1, 1, 1, 0]
+Large  pred: [1, 2, 1, 0, 2, 1, 1, 1, 0]
+Huge   pred: [1, 3, 0, 0, 0, 0, 0, 0, 0]
+final_pred:  [1. 2. 0. 0. 2. 0. 0. 0. 0.]
+score: 44.44%
+
+CV Fold 4/5
+TRAIN/VAL: 36 [0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 29, 31, 32, 33, 34, 36, 37, 38, 39, 40, 42, 43]
+TEST: 8 [6, 8, 16, 19, 28, 30, 35, 41]
+Bootstrap Sample Set:
+Tiny   | train: (108, 14000, 20) test: (8, 14000, 20)
+Small  | train: (108, 14000, 20) test: (8, 14000, 20)
+Medium | train: (108, 14000, 20) test: (8, 14000, 20)
+Large  | train: (108, 14000, 20) test: (8, 14000, 20)
+Huge   | train: (108, 14000, 20) test: (8, 14000, 20)
+Tiny Model 2 units
+X_train: (75, 14000, 20)
+Train on 75 samples, validate on 33 samples
+Epoch 1/20
+ - 21s - loss: 1.3785 - acc: 0.3733 - val_loss: 1.3597 - val_acc: 0.4242
+Epoch 2/20
+ - 14s - loss: 1.3816 - acc: 0.3333 - val_loss: 1.3597 - val_acc: 0.4242
+Epoch 3/20
+ - 15s - loss: 1.3831 - acc: 0.3733 - val_loss: 1.3597 - val_acc: 0.4242
+Epoch 4/20
+ - 14s - loss: 1.3701 - acc: 0.3733 - val_loss: 1.3596 - val_acc: 0.4242
+Epoch 5/20
+ - 15s - loss: 1.3746 - acc: 0.3600 - val_loss: 1.3593 - val_acc: 0.4242
+Epoch 6/20
+ - 15s - loss: 1.3759 - acc: 0.3733 - val_loss: 1.3590 - val_acc: 0.4242
+Epoch 7/20
+ - 15s - loss: 1.3769 - acc: 0.3867 - val_loss: 1.3587 - val_acc: 0.4545
+Epoch 8/20
+ - 15s - loss: 1.3714 - acc: 0.3867 - val_loss: 1.3585 - val_acc: 0.4545
+Epoch 9/20
+ - 15s - loss: 1.3717 - acc: 0.4133 - val_loss: 1.3581 - val_acc: 0.4545
+Epoch 10/20
+ - 15s - loss: 1.3725 - acc: 0.3600 - val_loss: 1.3577 - val_acc: 0.4545
+Epoch 11/20
+ - 15s - loss: 1.3783 - acc: 0.3200 - val_loss: 1.3574 - val_acc: 0.4545
+Epoch 12/20
+ - 15s - loss: 1.3733 - acc: 0.3733 - val_loss: 1.3571 - val_acc: 0.4545
+Epoch 13/20
+ - 15s - loss: 1.3709 - acc: 0.3733 - val_loss: 1.3568 - val_acc: 0.4545
+Epoch 14/20
+ - 15s - loss: 1.3716 - acc: 0.3867 - val_loss: 1.3565 - val_acc: 0.4545
+Epoch 15/20
+ - 15s - loss: 1.3695 - acc: 0.3333 - val_loss: 1.3561 - val_acc: 0.4545
+Epoch 16/20
+ - 15s - loss: 1.3703 - acc: 0.3333 - val_loss: 1.3557 - val_acc: 0.4545
+Epoch 17/20
+ - 14s - loss: 1.3727 - acc: 0.3467 - val_loss: 1.3552 - val_acc: 0.3939
+Epoch 18/20
+ - 15s - loss: 1.3691 - acc: 0.3467 - val_loss: 1.3547 - val_acc: 0.3939
+Epoch 19/20
+ - 14s - loss: 1.3657 - acc: 0.3867 - val_loss: 1.3540 - val_acc: 0.3939
+Epoch 20/20
+ - 15s - loss: 1.3699 - acc: 0.3600 - val_loss: 1.3533 - val_acc: 0.3939
+Small Model 10 units
+X_train: (75, 14000, 20)
+Train on 75 samples, validate on 33 samples
+Epoch 1/20
+ - 21s - loss: 1.4062 - acc: 0.2400 - val_loss: 1.3816 - val_acc: 0.2727
+Epoch 2/20
+ - 14s - loss: 1.4138 - acc: 0.1867 - val_loss: 1.3795 - val_acc: 0.2727
+Epoch 3/20
+ - 15s - loss: 1.4115 - acc: 0.2133 - val_loss: 1.3775 - val_acc: 0.2727
+Epoch 4/20
+ - 15s - loss: 1.3899 - acc: 0.2267 - val_loss: 1.3759 - val_acc: 0.2727
+Epoch 5/20
+ - 15s - loss: 1.3996 - acc: 0.2400 - val_loss: 1.3745 - val_acc: 0.2727
+Epoch 6/20
+ - 16s - loss: 1.3841 - acc: 0.2267 - val_loss: 1.3732 - val_acc: 0.3030
+Epoch 7/20
+ - 15s - loss: 1.3761 - acc: 0.2800 - val_loss: 1.3722 - val_acc: 0.2727
+Epoch 8/20
+ - 15s - loss: 1.3828 - acc: 0.2533 - val_loss: 1.3713 - val_acc: 0.2727
+Epoch 9/20
+ - 16s - loss: 1.3811 - acc: 0.2133 - val_loss: 1.3705 - val_acc: 0.2727
+Epoch 10/20
+ - 15s - loss: 1.3822 - acc: 0.2133 - val_loss: 1.3699 - val_acc: 0.2727
+Epoch 11/20
+ - 15s - loss: 1.3781 - acc: 0.2667 - val_loss: 1.3692 - val_acc: 0.2424
+Epoch 12/20
+ - 15s - loss: 1.3809 - acc: 0.2400 - val_loss: 1.3685 - val_acc: 0.2424
+Epoch 13/20
+ - 15s - loss: 1.3734 - acc: 0.3067 - val_loss: 1.3679 - val_acc: 0.2424
+Epoch 14/20
+ - 15s - loss: 1.3773 - acc: 0.1867 - val_loss: 1.3673 - val_acc: 0.3030
+Epoch 15/20
+ - 15s - loss: 1.3640 - acc: 0.2533 - val_loss: 1.3666 - val_acc: 0.3333
+Epoch 16/20
+ - 15s - loss: 1.3742 - acc: 0.2533 - val_loss: 1.3660 - val_acc: 0.3333
+Epoch 17/20
+ - 15s - loss: 1.3671 - acc: 0.2933 - val_loss: 1.3653 - val_acc: 0.3636
+Epoch 18/20
+ - 15s - loss: 1.3611 - acc: 0.2933 - val_loss: 1.3646 - val_acc: 0.3636
+Epoch 19/20
+ - 14s - loss: 1.3619 - acc: 0.3600 - val_loss: 1.3639 - val_acc: 0.3939
+Epoch 20/20
+ - 14s - loss: 1.3550 - acc: 0.3733 - val_loss: 1.3632 - val_acc: 0.3636
+Medium Model 25 units
+X_train: (75, 14000, 20)
+Train on 75 samples, validate on 33 samples
+Epoch 1/20
+ - 20s - loss: 1.4573 - acc: 0.2667 - val_loss: 1.3375 - val_acc: 0.3636
+Epoch 2/20
+ - 14s - loss: 1.3913 - acc: 0.2533 - val_loss: 1.3454 - val_acc: 0.4242
+Epoch 3/20
+ - 14s - loss: 1.4209 - acc: 0.2933 - val_loss: 1.3546 - val_acc: 0.2727
+Epoch 4/20
+ - 14s - loss: 1.4227 - acc: 0.2667 - val_loss: 1.3625 - val_acc: 0.2727
+Epoch 5/20
+ - 14s - loss: 1.3739 - acc: 0.2667 - val_loss: 1.3683 - val_acc: 0.2727
+Epoch 6/20
+ - 14s - loss: 1.3854 - acc: 0.2400 - val_loss: 1.3756 - val_acc: 0.2121
+Epoch 7/20
+ - 14s - loss: 1.3704 - acc: 0.2933 - val_loss: 1.3791 - val_acc: 0.2424
+Epoch 8/20
+ - 14s - loss: 1.3667 - acc: 0.3067 - val_loss: 1.3791 - val_acc: 0.2424
+Epoch 9/20
+ - 15s - loss: 1.3593 - acc: 0.2800 - val_loss: 1.3763 - val_acc: 0.2424
+Epoch 10/20
+ - 14s - loss: 1.3516 - acc: 0.3200 - val_loss: 1.3716 - val_acc: 0.2424
+Epoch 11/20
+ - 14s - loss: 1.3611 - acc: 0.3067 - val_loss: 1.3652 - val_acc: 0.3030
+Epoch 12/20
+ - 14s - loss: 1.3539 - acc: 0.3733 - val_loss: 1.3561 - val_acc: 0.1515
+Epoch 13/20
+ - 15s - loss: 1.3492 - acc: 0.3467 - val_loss: 1.3453 - val_acc: 0.2121
+Epoch 14/20
+ - 14s - loss: 1.3640 - acc: 0.2667 - val_loss: 1.3333 - val_acc: 0.2727
+Epoch 15/20
+ - 14s - loss: 1.3550 - acc: 0.3733 - val_loss: 1.3214 - val_acc: 0.3333
+Epoch 16/20
+ - 14s - loss: 1.3287 - acc: 0.3467 - val_loss: 1.3101 - val_acc: 0.3939
+Epoch 17/20
+ - 14s - loss: 1.3330 - acc: 0.3867 - val_loss: 1.2983 - val_acc: 0.5152
+Epoch 18/20
+ - 13s - loss: 1.3525 - acc: 0.2800 - val_loss: 1.2865 - val_acc: 0.5152
+Epoch 19/20
+ - 14s - loss: 1.3213 - acc: 0.4133 - val_loss: 1.2757 - val_acc: 0.4545
+Epoch 20/20
+ - 14s - loss: 1.3263 - acc: 0.4000 - val_loss: 1.2666 - val_acc: 0.5152
+Large Model 50 units
+X_train: (75, 14000, 20)
+Train on 75 samples, validate on 33 samples
+Epoch 1/20
+ - 21s - loss: 1.4012 - acc: 0.2133 - val_loss: 1.4129 - val_acc: 0.0606
+Epoch 2/20
+ - 14s - loss: 1.3823 - acc: 0.2267 - val_loss: 1.4082 - val_acc: 0.1212
+Epoch 3/20
+ - 14s - loss: 1.3739 - acc: 0.3467 - val_loss: 1.4043 - val_acc: 0.2121
+Epoch 4/20
+ - 14s - loss: 1.3650 - acc: 0.3867 - val_loss: 1.4011 - val_acc: 0.2424
+Epoch 5/20
+ - 14s - loss: 1.3530 - acc: 0.4800 - val_loss: 1.3991 - val_acc: 0.2424
+Epoch 6/20
+ - 14s - loss: 1.3434 - acc: 0.5333 - val_loss: 1.3981 - val_acc: 0.2424
+Epoch 7/20
+ - 14s - loss: 1.3531 - acc: 0.3867 - val_loss: 1.3976 - val_acc: 0.2424
+Epoch 8/20
+ - 14s - loss: 1.3471 - acc: 0.4533 - val_loss: 1.3975 - val_acc: 0.2424
+Epoch 9/20
+ - 14s - loss: 1.3315 - acc: 0.4533 - val_loss: 1.3980 - val_acc: 0.2424
+Epoch 10/20
+ - 15s - loss: 1.3383 - acc: 0.4133 - val_loss: 1.3986 - val_acc: 0.2424
+Epoch 11/20
+ - 14s - loss: 1.3296 - acc: 0.4533 - val_loss: 1.3992 - val_acc: 0.2424
+Epoch 12/20
+ - 15s - loss: 1.3241 - acc: 0.4533 - val_loss: 1.3999 - val_acc: 0.2424
+Epoch 13/20
+ - 14s - loss: 1.3244 - acc: 0.4800 - val_loss: 1.4004 - val_acc: 0.2424
+Epoch 14/20
+ - 14s - loss: 1.3201 - acc: 0.4667 - val_loss: 1.4005 - val_acc: 0.2424
+Epoch 15/20
+ - 14s - loss: 1.3054 - acc: 0.5467 - val_loss: 1.4003 - val_acc: 0.2424
+Epoch 16/20
+ - 14s - loss: 1.3060 - acc: 0.5067 - val_loss: 1.3997 - val_acc: 0.2424
+Epoch 17/20
+ - 14s - loss: 1.3091 - acc: 0.5600 - val_loss: 1.3985 - val_acc: 0.2424
+Epoch 18/20
+ - 14s - loss: 1.2940 - acc: 0.5600 - val_loss: 1.3972 - val_acc: 0.2424
+Epoch 19/20
+ - 14s - loss: 1.2954 - acc: 0.5333 - val_loss: 1.3960 - val_acc: 0.2424
+Epoch 20/20
+ - 14s - loss: 1.2822 - acc: 0.5600 - val_loss: 1.3942 - val_acc: 0.2424
+Huge Model 100 units
+X_train: (75, 14000, 20)
+Train on 75 samples, validate on 33 samples
+Epoch 1/20
+ - 43s - loss: 1.4091 - acc: 0.2400 - val_loss: 1.3909 - val_acc: 0.2727
+Epoch 2/20
+ - 34s - loss: 1.3795 - acc: 0.2533 - val_loss: 1.3944 - val_acc: 0.2727
+Epoch 3/20
+ - 17s - loss: 1.3698 - acc: 0.3067 - val_loss: 1.3964 - val_acc: 0.2727
+Epoch 4/20
+ - 16s - loss: 1.3656 - acc: 0.3067 - val_loss: 1.3964 - val_acc: 0.2727
+Epoch 5/20
+ - 16s - loss: 1.3545 - acc: 0.2933 - val_loss: 1.3953 - val_acc: 0.2727
+Epoch 6/20
+ - 16s - loss: 1.3492 - acc: 0.3067 - val_loss: 1.3940 - val_acc: 0.2727
+Epoch 7/20
+ - 17s - loss: 1.3435 - acc: 0.3333 - val_loss: 1.3933 - val_acc: 0.3939
+Epoch 8/20
+ - 17s - loss: 1.3459 - acc: 0.3467 - val_loss: 1.3928 - val_acc: 0.3333
+Epoch 9/20
+ - 16s - loss: 1.3431 - acc: 0.3200 - val_loss: 1.3919 - val_acc: 0.3030
+Epoch 10/20
+ - 17s - loss: 1.3392 - acc: 0.3200 - val_loss: 1.3907 - val_acc: 0.2727
+Epoch 11/20
+ - 17s - loss: 1.3271 - acc: 0.3067 - val_loss: 1.3891 - val_acc: 0.2727
+Epoch 12/20
+ - 16s - loss: 1.3321 - acc: 0.3467 - val_loss: 1.3870 - val_acc: 0.2727
+Epoch 13/20
+ - 16s - loss: 1.3257 - acc: 0.3733 - val_loss: 1.3846 - val_acc: 0.2727
+Epoch 14/20
+ - 17s - loss: 1.3177 - acc: 0.3733 - val_loss: 1.3820 - val_acc: 0.3030
+Epoch 15/20
+ - 16s - loss: 1.3156 - acc: 0.3733 - val_loss: 1.3789 - val_acc: 0.3333
+Epoch 16/20
+ - 17s - loss: 1.3064 - acc: 0.4533 - val_loss: 1.3754 - val_acc: 0.3636
+Epoch 17/20
+ - 17s - loss: 1.3101 - acc: 0.4133 - val_loss: 1.3703 - val_acc: 0.3333
+Epoch 18/20
+ - 16s - loss: 1.2929 - acc: 0.4800 - val_loss: 1.3629 - val_acc: 0.3636
+Epoch 19/20
+ - 17s - loss: 1.2910 - acc: 0.4267 - val_loss: 1.3552 - val_acc: 0.3636
+Epoch 20/20
+ - 16s - loss: 1.2804 - acc: 0.4400 - val_loss: 1.3462 - val_acc: 0.3636
+y_test:      [1, 0, 0, 2, 2, 2, 3, 3]
+Tiny   pred: [0, 0, 0, 0, 2, 0, 0, 2]
+Small  pred: [0, 0, 0, 0, 2, 0, 0, 2]
+Medium pred: [0, 3, 0, 0, 2, 3, 3, 0]
+Large  pred: [0, 0, 0, 0, 2, 0, 0, 2]
+Huge   pred: [0, 2, 0, 0, 2, 0, 2, 2]
+final_pred:  [0. 0. 0. 0. 2. 0. 0. 2.]
+score: 37.50%
+
+CV Fold 5/5
+TRAIN/VAL: 36 [0, 1, 2, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 28, 30, 31, 32, 33, 34, 35, 36, 38, 39, 41, 42, 43]
+TEST: 8 [3, 10, 15, 20, 24, 29, 37, 40]
+Bootstrap Sample Set:
+Tiny   | train: (108, 14000, 20) test: (8, 14000, 20)
+Small  | train: (108, 14000, 20) test: (8, 14000, 20)
+Medium | train: (108, 14000, 20) test: (8, 14000, 20)
+Large  | train: (108, 14000, 20) test: (8, 14000, 20)
+Huge   | train: (108, 14000, 20) test: (8, 14000, 20)
+Tiny Model 2 units
+X_train: (75, 14000, 20)
+Train on 75 samples, validate on 33 samples
+Epoch 1/20
+ - 23s - loss: 1.3676 - acc: 0.2933 - val_loss: 1.3951 - val_acc: 0.2727
+Epoch 2/20
+ - 15s - loss: 1.3715 - acc: 0.2800 - val_loss: 1.3964 - val_acc: 0.2727
+Epoch 3/20
+ - 15s - loss: 1.3647 - acc: 0.3067 - val_loss: 1.3975 - val_acc: 0.2727
+Epoch 4/20
+ - 15s - loss: 1.3677 - acc: 0.2667 - val_loss: 1.3987 - val_acc: 0.2727
+Epoch 5/20
+ - 14s - loss: 1.3675 - acc: 0.2800 - val_loss: 1.3999 - val_acc: 0.2727
+Epoch 6/20
+ - 15s - loss: 1.3574 - acc: 0.3200 - val_loss: 1.4011 - val_acc: 0.2727
+Epoch 7/20
+ - 14s - loss: 1.3622 - acc: 0.2933 - val_loss: 1.4023 - val_acc: 0.2727
+Epoch 8/20
+ - 15s - loss: 1.3690 - acc: 0.2667 - val_loss: 1.4036 - val_acc: 0.2727
+Epoch 9/20
+ - 15s - loss: 1.3661 - acc: 0.2800 - val_loss: 1.4048 - val_acc: 0.2727
+Epoch 10/20
+ - 15s - loss: 1.3604 - acc: 0.2800 - val_loss: 1.4061 - val_acc: 0.2727
+Epoch 11/20
+ - 15s - loss: 1.3613 - acc: 0.2933 - val_loss: 1.4073 - val_acc: 0.2727
+Epoch 12/20
+ - 14s - loss: 1.3528 - acc: 0.2933 - val_loss: 1.4086 - val_acc: 0.2727
+Epoch 13/20
+ - 14s - loss: 1.3566 - acc: 0.3067 - val_loss: 1.4098 - val_acc: 0.2727
+Epoch 14/20
+ - 15s - loss: 1.3551 - acc: 0.3067 - val_loss: 1.4110 - val_acc: 0.2727
+Epoch 15/20
+ - 15s - loss: 1.3545 - acc: 0.2800 - val_loss: 1.4122 - val_acc: 0.2727
+Epoch 16/20
+ - 15s - loss: 1.3573 - acc: 0.2800 - val_loss: 1.4133 - val_acc: 0.2727
+Epoch 17/20
+ - 14s - loss: 1.3599 - acc: 0.2667 - val_loss: 1.4144 - val_acc: 0.2727
+Epoch 18/20
+ - 15s - loss: 1.3602 - acc: 0.2667 - val_loss: 1.4156 - val_acc: 0.2727
+Epoch 19/20
+ - 15s - loss: 1.3622 - acc: 0.2667 - val_loss: 1.4167 - val_acc: 0.2727
+Epoch 20/20
+ - 14s - loss: 1.3451 - acc: 0.3333 - val_loss: 1.4178 - val_acc: 0.2727
+Small Model 10 units
+X_train: (75, 14000, 20)
+Train on 75 samples, validate on 33 samples
+Epoch 1/20
+ - 23s - loss: 1.4249 - acc: 0.2933 - val_loss: 1.4195 - val_acc: 0.2727
+Epoch 2/20
+ - 15s - loss: 1.4171 - acc: 0.2933 - val_loss: 1.4106 - val_acc: 0.2727
+Epoch 3/20
+ - 15s - loss: 1.4136 - acc: 0.3067 - val_loss: 1.4025 - val_acc: 0.2727
+Epoch 4/20
+ - 15s - loss: 1.4062 - acc: 0.2933 - val_loss: 1.3949 - val_acc: 0.2727
+Epoch 5/20
+ - 15s - loss: 1.4046 - acc: 0.2933 - val_loss: 1.3879 - val_acc: 0.2727
+Epoch 6/20
+ - 15s - loss: 1.3961 - acc: 0.2933 - val_loss: 1.3816 - val_acc: 0.2727
+Epoch 7/20
+ - 15s - loss: 1.3862 - acc: 0.2933 - val_loss: 1.3760 - val_acc: 0.2727
+Epoch 8/20
+ - 15s - loss: 1.3945 - acc: 0.3200 - val_loss: 1.3711 - val_acc: 0.2727
+Epoch 9/20
+ - 15s - loss: 1.3826 - acc: 0.3333 - val_loss: 1.3669 - val_acc: 0.2727
+Epoch 10/20
+ - 16s - loss: 1.3782 - acc: 0.3200 - val_loss: 1.3632 - val_acc: 0.2727
+Epoch 11/20
+ - 15s - loss: 1.3813 - acc: 0.3067 - val_loss: 1.3599 - val_acc: 0.2727
+Epoch 12/20
+ - 15s - loss: 1.3717 - acc: 0.2667 - val_loss: 1.3569 - val_acc: 0.3333
+Epoch 13/20
+ - 16s - loss: 1.3983 - acc: 0.2400 - val_loss: 1.3542 - val_acc: 0.3030
+Epoch 14/20
+ - 15s - loss: 1.3948 - acc: 0.2533 - val_loss: 1.3522 - val_acc: 0.3030
+Epoch 15/20
+ - 15s - loss: 1.3658 - acc: 0.3200 - val_loss: 1.3503 - val_acc: 0.3030
+Epoch 16/20
+ - 15s - loss: 1.3770 - acc: 0.2800 - val_loss: 1.3487 - val_acc: 0.3333
+Epoch 17/20
+ - 15s - loss: 1.3980 - acc: 0.2400 - val_loss: 1.3472 - val_acc: 0.3636
+Epoch 18/20
+ - 15s - loss: 1.3873 - acc: 0.3200 - val_loss: 1.3460 - val_acc: 0.3636
+Epoch 19/20
+ - 15s - loss: 1.3819 - acc: 0.2667 - val_loss: 1.3449 - val_acc: 0.3636
+Epoch 20/20
+ - 15s - loss: 1.3763 - acc: 0.2133 - val_loss: 1.3440 - val_acc: 0.3636
+Medium Model 25 units
+X_train: (75, 14000, 20)
+Train on 75 samples, validate on 33 samples
+Epoch 1/20
+ - 23s - loss: 1.4281 - acc: 0.2133 - val_loss: 1.4229 - val_acc: 0.2424
+Epoch 2/20
+ - 13s - loss: 1.4306 - acc: 0.2400 - val_loss: 1.4186 - val_acc: 0.2727
+Epoch 3/20
+ - 14s - loss: 1.4108 - acc: 0.1733 - val_loss: 1.4156 - val_acc: 0.2727
+Epoch 4/20
+ - 14s - loss: 1.3990 - acc: 0.2533 - val_loss: 1.4135 - val_acc: 0.2727
+Epoch 5/20
+ - 14s - loss: 1.4246 - acc: 0.2000 - val_loss: 1.4120 - val_acc: 0.2727
+Epoch 6/20
+ - 14s - loss: 1.3867 - acc: 0.2800 - val_loss: 1.4110 - val_acc: 0.3030
+Epoch 7/20
+ - 14s - loss: 1.3884 - acc: 0.2667 - val_loss: 1.4108 - val_acc: 0.3030
+Epoch 8/20
+ - 14s - loss: 1.3753 - acc: 0.2800 - val_loss: 1.4096 - val_acc: 0.2424
+Epoch 9/20
+ - 14s - loss: 1.3909 - acc: 0.3200 - val_loss: 1.4086 - val_acc: 0.2727
+Epoch 10/20
+ - 14s - loss: 1.3776 - acc: 0.1733 - val_loss: 1.4060 - val_acc: 0.3030
+Epoch 11/20
+ - 13s - loss: 1.3789 - acc: 0.2933 - val_loss: 1.4034 - val_acc: 0.3030
+Epoch 12/20
+ - 14s - loss: 1.3683 - acc: 0.3867 - val_loss: 1.4015 - val_acc: 0.3030
+Epoch 13/20
+ - 14s - loss: 1.3570 - acc: 0.3067 - val_loss: 1.3998 - val_acc: 0.3030
+Epoch 14/20
+ - 14s - loss: 1.3605 - acc: 0.3333 - val_loss: 1.3983 - val_acc: 0.3030
+Epoch 15/20
+ - 14s - loss: 1.3763 - acc: 0.3333 - val_loss: 1.3965 - val_acc: 0.3030
+Epoch 16/20
+ - 14s - loss: 1.3605 - acc: 0.3333 - val_loss: 1.3937 - val_acc: 0.3030
+Epoch 17/20
+ - 15s - loss: 1.3582 - acc: 0.3467 - val_loss: 1.3905 - val_acc: 0.3030
+Epoch 18/20
+ - 13s - loss: 1.3607 - acc: 0.3600 - val_loss: 1.3873 - val_acc: 0.3030
+Epoch 19/20
+ - 14s - loss: 1.3461 - acc: 0.3600 - val_loss: 1.3847 - val_acc: 0.3030
+Epoch 20/20
+ - 14s - loss: 1.3611 - acc: 0.3467 - val_loss: 1.3826 - val_acc: 0.3030
+Large Model 50 units
+X_train: (75, 14000, 20)
+Train on 75 samples, validate on 33 samples
+Epoch 1/20
+ - 23s - loss: 1.4373 - acc: 0.2667 - val_loss: 1.3967 - val_acc: 0.3636
+Epoch 2/20
+ - 14s - loss: 1.4355 - acc: 0.2267 - val_loss: 1.4177 - val_acc: 0.1515
+Epoch 3/20
+ - 14s - loss: 1.3996 - acc: 0.2000 - val_loss: 1.4380 - val_acc: 0.1515
+Epoch 4/20
+ - 14s - loss: 1.4020 - acc: 0.2133 - val_loss: 1.4551 - val_acc: 0.1515
+Epoch 5/20
+ - 15s - loss: 1.4008 - acc: 0.2133 - val_loss: 1.4648 - val_acc: 0.1515
+Epoch 6/20
+ - 14s - loss: 1.3903 - acc: 0.2533 - val_loss: 1.4687 - val_acc: 0.1515
+Epoch 7/20
+ - 15s - loss: 1.3856 - acc: 0.2400 - val_loss: 1.4680 - val_acc: 0.1515
+Epoch 8/20
+ - 14s - loss: 1.3741 - acc: 0.2800 - val_loss: 1.4631 - val_acc: 0.1515
+Epoch 9/20
+ - 14s - loss: 1.3752 - acc: 0.2533 - val_loss: 1.4553 - val_acc: 0.1515
+Epoch 10/20
+ - 14s - loss: 1.3634 - acc: 0.2667 - val_loss: 1.4467 - val_acc: 0.1515
+Epoch 11/20
+ - 14s - loss: 1.3646 - acc: 0.3067 - val_loss: 1.4374 - val_acc: 0.1212
+Epoch 12/20
+ - 14s - loss: 1.3556 - acc: 0.2933 - val_loss: 1.4281 - val_acc: 0.1515
+Epoch 13/20
+ - 14s - loss: 1.3741 - acc: 0.2933 - val_loss: 1.4203 - val_acc: 0.2424
+Epoch 14/20
+ - 15s - loss: 1.3484 - acc: 0.4133 - val_loss: 1.4147 - val_acc: 0.1818
+Epoch 15/20
+ - 14s - loss: 1.3470 - acc: 0.3600 - val_loss: 1.4118 - val_acc: 0.2424
+Epoch 16/20
+ - 14s - loss: 1.3495 - acc: 0.3867 - val_loss: 1.4106 - val_acc: 0.2424
+Epoch 17/20
+ - 14s - loss: 1.3408 - acc: 0.3733 - val_loss: 1.4112 - val_acc: 0.2424
+Epoch 18/20
+ - 14s - loss: 1.3391 - acc: 0.4000 - val_loss: 1.4132 - val_acc: 0.2424
+Epoch 19/20
+ - 14s - loss: 1.3308 - acc: 0.4267 - val_loss: 1.4164 - val_acc: 0.2424
+Epoch 20/20
+ - 14s - loss: 1.3075 - acc: 0.3867 - val_loss: 1.4213 - val_acc: 0.2424
+Huge Model 100 units
+X_train: (75, 14000, 20)
+Train on 75 samples, validate on 33 samples
+Epoch 1/20
+ - 375s - loss: 1.4009 - acc: 0.3067 - val_loss: 1.4565 - val_acc: 0.1818
+Epoch 2/20
+ - 33s - loss: 1.3866 - acc: 0.3067 - val_loss: 1.4564 - val_acc: 0.1818
+Epoch 3/20
+ - 17s - loss: 1.3583 - acc: 0.3467 - val_loss: 1.4395 - val_acc: 0.2424
+Epoch 4/20
+ - 16s - loss: 1.3649 - acc: 0.3067 - val_loss: 1.4248 - val_acc: 0.2727
+Epoch 5/20
+ - 16s - loss: 1.3493 - acc: 0.3733 - val_loss: 1.4169 - val_acc: 0.2727
+Epoch 6/20
+ - 16s - loss: 1.3299 - acc: 0.4400 - val_loss: 1.4139 - val_acc: 0.2727
+Epoch 7/20
+ - 17s - loss: 1.3165 - acc: 0.4133 - val_loss: 1.4143 - val_acc: 0.2727
+Epoch 8/20
+ - 16s - loss: 1.3182 - acc: 0.4533 - val_loss: 1.4161 - val_acc: 0.2727
+Epoch 9/20
+ - 16s - loss: 1.3152 - acc: 0.4533 - val_loss: 1.4159 - val_acc: 0.2727
+Epoch 10/20
+ - 17s - loss: 1.3042 - acc: 0.4533 - val_loss: 1.4123 - val_acc: 0.2727
+Epoch 11/20
+ - 17s - loss: 1.3077 - acc: 0.4267 - val_loss: 1.4016 - val_acc: 0.2727
+Epoch 12/20
+ - 17s - loss: 1.2939 - acc: 0.4133 - val_loss: 1.3971 - val_acc: 0.2727
+Epoch 13/20
+ - 16s - loss: 1.3083 - acc: 0.3733 - val_loss: 1.4011 - val_acc: 0.2727
+Epoch 14/20
+ - 17s - loss: 1.3062 - acc: 0.3467 - val_loss: 1.4072 - val_acc: 0.2424
+Epoch 15/20
+ - 17s - loss: 1.3007 - acc: 0.3733 - val_loss: 1.4152 - val_acc: 0.3030
+Epoch 16/20
+ - 17s - loss: 1.2895 - acc: 0.4000 - val_loss: 1.4110 - val_acc: 0.3030
+Epoch 17/20
+ - 19s - loss: 1.2827 - acc: 0.4000 - val_loss: 1.4116 - val_acc: 0.3030
+Epoch 18/20
+ - 17s - loss: 1.2728 - acc: 0.4133 - val_loss: 1.4149 - val_acc: 0.2727
+Epoch 19/20
+ - 17s - loss: 1.2805 - acc: 0.4267 - val_loss: 1.4009 - val_acc: 0.3030
+Epoch 20/20
+ - 17s - loss: 1.2440 - acc: 0.4533 - val_loss: 1.3760 - val_acc: 0.2727
+y_test:      [1, 0, 0, 2, 2, 2, 3, 3]
+Tiny   pred: [2, 2, 2, 2, 2, 2, 2, 2]
+Small  pred: [2, 2, 2, 2, 2, 2, 2, 2]
+Medium pred: [0, 0, 0, 0, 1, 1, 1, 1]
+Large  pred: [0, 0, 0, 0, 1, 0, 1, 2]
+Huge   pred: [2, 2, 2, 2, 1, 2, 1, 2]
+final_pred:  [2. 2. 2. 2. 1. 2. 1. 2.]
+score: 25.00%
+
+Cross Fold Classification Accuracy:
+34.06% (+/- 6.61%)
+Confusion matrix, without normalization
+[[ 4  0  7  0]
+ [ 1  1  6  0]
+ [ 4  1 10  0]
+ [ 3  1  6  0]]
+Elapsed Time: 02:16:32.67
