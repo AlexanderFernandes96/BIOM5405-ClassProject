@@ -1,0 +1,705 @@
+"""Long Short Term Memory Network Classifier python module
+
+website references:
+https://www.kaggle.com/ternaryrealm/lstm-time-series-explorations-with-keras"""
+
+import time
+import itertools
+import os
+from os import listdir
+from os.path import isfile, join
+
+from numpy import genfromtxt
+import numpy as np
+from keras.models import Sequential
+from keras.layers import LSTM, Dense
+from keras.wrappers.scikit_learn import KerasRegressor
+from keras.layers.convolutional import Conv1D
+from keras.layers.convolutional import MaxPooling1D
+from keras.utils import to_categorical
+from sklearn.ensemble import AdaBoostClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix
+from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import cross_val_score
+import matplotlib.pyplot as plt
+
+# fix random seed for reproducibility
+# seed = 7
+# np.random.seed(seed)
+
+# Disable tensorflow warning messages
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+# Data Parameters
+NUM_CLASS = 2  # Change to two for Healthy vs Diseased binary classification
+NUM_FEATURES = 20
+NUM_TIME_SERIES = 90000
+NUM_TS_CROP = 20000  # time series data cropped by NUM_TS_CROP/2 on start and end
+NUM_SKIP_SAMP = 5 # number of time series samples to skip over (after crop)
+
+# Split Parameters
+NUM_K_SPLIT = 5  # number k fold to split into training and test
+VAL_SPLIT = 0.3  # validation set split from split training set (randomized for each k fold cross validation)
+
+# Run Parameters
+NUM_LSTM_CELLS = 100
+NUM_EPOCH = 20
+BATCH_SIZE = 500
+
+if NUM_CLASS == 4:
+    LABEL_CTRL = 0
+    LABEL_ALS = 1
+    LABEL_HUNT = 2
+    LABEL_PARK = 3
+    n_outputs = 4
+    class_names = ['Control', 'ALS', 'Hunting', 'Parkingson']
+else:
+    LABEL_CTRL = 0
+    LABEL_ALS = 1
+    LABEL_HUNT = 1
+    LABEL_PARK = 1
+    n_outputs = 1
+    class_names = ['Healthy', 'Diseased']
+
+
+def load_data(folder):
+    file_list = [f for f in listdir(folder) if isfile(join(folder, f))]
+
+    # Labels for time series data
+    y = []
+
+    X_file_list = []
+
+    print('Loading: label | file')
+    for file_name in file_list:
+        if 'als' in file_name:
+            y.append(LABEL_ALS)
+            X_file_list.append(file_name)
+            print(LABEL_ALS, end='')
+        elif 'control' in file_name:
+            y.append(LABEL_CTRL)
+            X_file_list.append(file_name)
+            print(LABEL_CTRL, end='')
+        elif 'hunt' in file_name:
+            y.append(LABEL_HUNT)
+            X_file_list.append(file_name)
+            print(LABEL_HUNT, end='')
+        elif 'park' in file_name:
+            y.append(LABEL_PARK)
+            X_file_list.append(file_name)
+            print(LABEL_PARK, end='')
+        else:
+            print('~', end='')
+        print(' |', file_name)
+
+    # Time series data, (only using leg 0 for the time being)
+    X = np.empty([len(y), NUM_TIME_SERIES, NUM_FEATURES], float)
+
+    for f_i in range(len(X_file_list)):
+        if any(x in file_list[f_i] for x in ['als', 'control', 'hunt', 'park']):
+            data = genfromtxt(folder + file_list[f_i], delimiter=',', dtype=float)
+            X[f_i] = data
+
+    # Crop time series data
+    X_crop = X[:, int(NUM_TS_CROP / 2):int(NUM_TIME_SERIES - NUM_TS_CROP / 2), :]
+
+    # Downsample time series data
+    X_half = X_crop[:, 0::NUM_SKIP_SAMP, :]
+
+    # Convert nan to 0
+    for s in range(X_half.shape[0]):
+        for t in range(X_half.shape[1]):
+            for f in range(X_half.shape[2]):
+                if np.isnan(X_half[s, t, f]):
+                    X_half[s, t, f] = 0
+
+    # Assert no Inf or nan data
+    assert not np.isnan(X_half.any())
+
+    X_final = X_half
+
+    return X_final, np.asarray(y)
+
+
+def baseline_model(num_lstm_cells=NUM_LSTM_CELLS, num_time_series=int((NUM_TIME_SERIES-NUM_TS_CROP)/NUM_SKIP_SAMP)):
+    # The model will be designed in the following manner:
+    # LSTM -> 1 sigmoid Dense Layer
+
+    # initialize a sequential keras model
+    model = Sequential()
+
+    # Input:
+    model.add(Dense(NUM_FEATURES, activation='sigmoid',
+                    input_shape=(num_time_series, NUM_FEATURES)))
+    # model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
+    # model.add(Dense(NUM_CLASS, activation='relu'))
+    # model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
+    # model.add(Dense(NUM_FEATURES, activation='sigmoid'))
+
+    # CNN 1D
+    # model.add(Conv1D(filters=32,
+    #                  kernel_size=3,
+    #                  padding='same',
+    #                  activation='relu',
+    #                  input_shape=(num_time_series, NUM_FEATURES)))
+    #
+    # # Pooling
+    # model.add(MaxPooling1D(pool_size=2))
+
+    # LSTM Master Layer
+    model.add(LSTM(num_lstm_cells,
+                   dropout=0.1,
+                   recurrent_dropout=0.1,
+                   return_sequences=True
+                   # input_shape=(num_time_series, NUM_FEATURES
+                   )
+              )
+
+    # LSTM Support Layer
+    model.add(LSTM(NUM_CLASS))
+
+    # Output: Dense Layer Classifier
+    # compile and fit our model
+    if NUM_CLASS == 2:
+        model.add(Dense(n_outputs, activation='sigmoid'))
+        model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    elif NUM_CLASS == 4:
+        model.add(Dense(n_outputs, activation='softmax'))
+        model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    return model
+
+
+def plot_confusion_matrix(cm, classes,
+                          normalize=False,
+                          title='Confusion matrix',
+                          cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        print("Normalized confusion matrix")
+    else:
+        print('Confusion matrix, without normalization')
+
+    print(cm)
+
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45)
+    plt.yticks(tick_marks, classes)
+
+    fmt = '.2f' if normalize else 'd'
+    thresh = cm.max() / 2.
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, format(cm[i, j], fmt),
+                 horizontalalignment="center",
+                 color="white" if cm[i, j] > thresh else "black")
+
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+    plt.tight_layout()
+
+
+# Run the following script using the following command via "python -m LSTMN.py"
+if __name__ == "__main__":
+    # Time Start
+    start_time = time.time()
+
+    # project_folder = '/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/'
+    project_folder = 'D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/'
+
+    X_total, y_total = load_data(project_folder + 'data/')
+
+    print('X_total =', X_total.shape)
+    print('y_total = ', y_total.tolist())
+
+    n_timesteps = X_total.shape[1]
+    n_features = X_total.shape[2]
+
+    print("Number Classes:", n_outputs)
+    print("Cropped Time Series Length:", n_timesteps)
+    print("Number Features:", NUM_FEATURES)
+
+    # define 5-fold cross validation test harness
+    kfold = StratifiedKFold(n_splits=NUM_K_SPLIT, shuffle=True)
+    cvscores = []
+    cm_sum = None
+
+    # Bagging
+    nbags = 5
+
+    fold_number = 1 # Print logging counter
+    for train_index, test_index in kfold.split(X_total, y_total):
+
+        print("CV Fold %d/%d" % (fold_number, NUM_K_SPLIT))
+        fold_number += 1
+
+        X_train, X_test = X_total[train_index], X_total[test_index]
+        y_train, y_test = y_total[train_index], y_total[test_index]
+
+        if NUM_CLASS == 4:
+            y_train = to_categorical(y_train, num_classes=n_outputs)
+            y_test = to_categorical(y_test, num_classes=n_outputs)
+
+        print("TRAIN/VAL:", len(train_index), train_index.tolist())
+        print("TEST:", len(test_index), test_index.tolist())
+
+        # Split validation set from the training set
+        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=VAL_SPLIT)
+
+        # Regular Model
+        model = baseline_model()
+        model.fit(X_train, y_train,
+                  validation_data=(X_val, y_val),
+                  epochs=NUM_EPOCH,
+                  batch_size=BATCH_SIZE,
+                  verbose=2)
+        scores = model.evaluate(X_test, y_test, verbose=2)
+        print("%s: %.2f%%" % (model.metrics_names[1], scores[1] * 100))
+        cvscores.append(scores[1] * 100)
+        y_pred = model.predict(X_test, batch_size=BATCH_SIZE)
+
+        print("y_test:", y_test)
+        print("y_pred:", y_pred)
+
+        # classify output predictions
+        if NUM_CLASS == 2:
+            y_pred = (y_pred > 0.5)
+        elif NUM_CLASS == 4:
+            y_ohe = y_pred
+            y_pred = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                y_pred.append(mx_i)
+            y_ohe = y_test
+            y_test = []
+            for y in y_ohe:
+                mx = 0
+                mx_i = None
+                for i in range(4):
+                    if y[i] > mx:
+                        mx_i = i
+                        mx = y[i]
+                y_test.append(mx_i)
+
+        print("y_test:", y_test)
+        print("y_pred:", y_pred)
+
+        # confusion matrix
+        if cm_sum is None:
+            cm_sum = confusion_matrix(y_test, y_pred)
+        else:
+            cm_sum += confusion_matrix(y_test, y_pred)
+
+    print("%.2f%% (+/- %.2f%%)" % (np.mean(cvscores), np.std(cvscores)))
+
+    # Plot non-normalized confusion matrix
+    plt.figure()
+    plot_confusion_matrix(cm_sum, classes=class_names, title='Confusion matrix, without normalization')
+
+    # Time End
+    elapsed_time = time.time()
+    hours, rem = divmod(elapsed_time - start_time, 3600)
+    minutes, seconds = divmod(rem, 60)
+    print("Elapsed Time: {:0>2}:{:0>2}:{:05.2f}".format(int(hours), int(minutes), seconds))
+
+    plt.show()
+
+
+
+
+C:\Users\alex9\AppData\Local\Programs\Python\Python35\python.exe D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/python/src/LSTMN.py
+Using TensorFlow backend.
+Loading: label | file
+1 | als1.tsv
+1 | als2.tsv
+1 | als3.tsv
+1 | als4.tsv
+1 | als5.tsv
+1 | als6.tsv
+1 | als7.tsv
+1 | als8.tsv
+0 | control1.tsv
+0 | control14.tsv
+0 | control15.tsv
+0 | control16.tsv
+0 | control2.tsv
+0 | control3.tsv
+0 | control4.tsv
+0 | control5.tsv
+0 | control6.tsv
+0 | control7.tsv
+0 | control8.tsv
+~ | file_index.txt
+1 | hunt1.tsv
+1 | hunt14.tsv
+1 | hunt15.tsv
+1 | hunt16.tsv
+1 | hunt17.tsv
+1 | hunt18.tsv
+1 | hunt19.tsv
+1 | hunt2.tsv
+1 | hunt20.tsv
+1 | hunt3.tsv
+1 | hunt4.tsv
+1 | hunt5.tsv
+1 | hunt6.tsv
+1 | hunt7.tsv
+1 | hunt8.tsv
+1 | park1.tsv
+1 | park14.tsv
+1 | park15.tsv
+1 | park2.tsv
+1 | park3.tsv
+1 | park4.tsv
+1 | park5.tsv
+1 | park6.tsv
+1 | park7.tsv
+1 | park8.tsv
+X_total = (44, 14000, 20)
+y_total =  [1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+Number Classes: 1
+Cropped Time Series Length: 14000
+Number Features: 20
+CV Fold 1/5
+TRAIN/VAL: 34 [0, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 15, 16, 17, 18, 20, 21, 22, 23, 24, 27, 28, 29, 30, 31, 33, 34, 36, 37, 39, 40, 41, 42, 43]
+TEST: 10 [1, 8, 9, 14, 19, 25, 26, 32, 35, 38]
+Train on 23 samples, validate on 11 samples
+Epoch 1/20
+ - 14s - loss: 0.6650 - acc: 0.6087 - val_loss: 0.5771 - val_acc: 0.8182
+Epoch 2/20
+ - 13s - loss: 0.6144 - acc: 0.7391 - val_loss: 0.5485 - val_acc: 0.8182
+Epoch 3/20
+ - 14s - loss: 0.5992 - acc: 0.7391 - val_loss: 0.5353 - val_acc: 0.8182
+Epoch 4/20
+ - 15s - loss: 0.5845 - acc: 0.7391 - val_loss: 0.5270 - val_acc: 0.8182
+Epoch 5/20
+ - 16s - loss: 0.5833 - acc: 0.7391 - val_loss: 0.5206 - val_acc: 0.8182
+Epoch 6/20
+ - 17s - loss: 0.5812 - acc: 0.7391 - val_loss: 0.5152 - val_acc: 0.8182
+Epoch 7/20
+ - 18s - loss: 0.5807 - acc: 0.7391 - val_loss: 0.5103 - val_acc: 0.8182
+Epoch 8/20
+ - 18s - loss: 0.5776 - acc: 0.7391 - val_loss: 0.5058 - val_acc: 0.8182
+Epoch 9/20
+ - 19s - loss: 0.5736 - acc: 0.7391 - val_loss: 0.5018 - val_acc: 0.8182
+Epoch 10/20
+ - 21s - loss: 0.5731 - acc: 0.7391 - val_loss: 0.4981 - val_acc: 0.8182
+Epoch 11/20
+ - 24s - loss: 0.5731 - acc: 0.7391 - val_loss: 0.4948 - val_acc: 0.8182
+Epoch 12/20
+ - 24s - loss: 0.5704 - acc: 0.7391 - val_loss: 0.4918 - val_acc: 0.8182
+Epoch 13/20
+ - 25s - loss: 0.5718 - acc: 0.7391 - val_loss: 0.4891 - val_acc: 0.8182
+Epoch 14/20
+ - 29s - loss: 0.5675 - acc: 0.7391 - val_loss: 0.4867 - val_acc: 0.8182
+Epoch 15/20
+ - 29s - loss: 0.5678 - acc: 0.7391 - val_loss: 0.4845 - val_acc: 0.8182
+Epoch 16/20
+ - 31s - loss: 0.5677 - acc: 0.7391 - val_loss: 0.4827 - val_acc: 0.8182
+Epoch 17/20
+ - 31s - loss: 0.5738 - acc: 0.7391 - val_loss: 0.4813 - val_acc: 0.8182
+Epoch 18/20
+ - 32s - loss: 0.5745 - acc: 0.7391 - val_loss: 0.4803 - val_acc: 0.8182
+Epoch 19/20
+ - 36s - loss: 0.5726 - acc: 0.7391 - val_loss: 0.4797 - val_acc: 0.8182
+Epoch 20/20
+ - 34s - loss: 0.5701 - acc: 0.7391 - val_loss: 0.4793 - val_acc: 0.8182
+acc: 70.00%
+y_test: [1 0 0 0 1 1 1 1 1 1]
+y_pred: [[0.77864724]
+ [0.77922297]
+ [0.77933586]
+ [0.7497279 ]
+ [0.769656  ]
+ [0.77570623]
+ [0.7457894 ]
+ [0.75730485]
+ [0.77871025]
+ [0.7784187 ]]
+y_test: [1 0 0 0 1 1 1 1 1 1]
+y_pred: [[ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]]
+CV Fold 2/5
+TRAIN/VAL: 35 [0, 1, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 21, 22, 23, 25, 26, 27, 28, 29, 31, 32, 34, 35, 36, 37, 38, 39, 41, 42, 43]
+TEST: 9 [2, 6, 15, 16, 20, 24, 30, 33, 40]
+Train on 24 samples, validate on 11 samples
+Epoch 1/20
+ - 34s - loss: 0.6920 - acc: 0.4583 - val_loss: 0.6883 - val_acc: 0.7273
+Epoch 2/20
+ - 34s - loss: 0.6788 - acc: 0.7500 - val_loss: 0.6763 - val_acc: 0.7273
+Epoch 3/20
+ - 34s - loss: 0.6681 - acc: 0.7500 - val_loss: 0.6680 - val_acc: 0.7273
+Epoch 4/20
+ - 37s - loss: 0.6600 - acc: 0.7500 - val_loss: 0.6603 - val_acc: 0.7273
+Epoch 5/20
+ - 39s - loss: 0.6489 - acc: 0.7500 - val_loss: 0.6528 - val_acc: 0.7273
+Epoch 6/20
+ - 42s - loss: 0.6365 - acc: 0.7500 - val_loss: 0.6445 - val_acc: 0.7273
+Epoch 7/20
+ - 43s - loss: 0.6295 - acc: 0.7500 - val_loss: 0.6354 - val_acc: 0.7273
+Epoch 8/20
+ - 45s - loss: 0.6174 - acc: 0.7500 - val_loss: 0.6261 - val_acc: 0.7273
+Epoch 9/20
+ - 47s - loss: 0.6054 - acc: 0.7500 - val_loss: 0.6185 - val_acc: 0.7273
+Epoch 10/20
+ - 48s - loss: 0.6032 - acc: 0.7500 - val_loss: 0.6132 - val_acc: 0.7273
+Epoch 11/20
+ - 50s - loss: 0.5949 - acc: 0.7500 - val_loss: 0.6092 - val_acc: 0.7273
+Epoch 12/20
+ - 50s - loss: 0.5924 - acc: 0.7500 - val_loss: 0.6060 - val_acc: 0.7273
+Epoch 13/20
+ - 50s - loss: 0.5865 - acc: 0.7500 - val_loss: 0.6032 - val_acc: 0.7273
+Epoch 14/20
+ - 50s - loss: 0.5836 - acc: 0.7500 - val_loss: 0.6007 - val_acc: 0.7273
+Epoch 15/20
+ - 52s - loss: 0.5803 - acc: 0.7500 - val_loss: 0.5984 - val_acc: 0.7273
+Epoch 16/20
+ - 53s - loss: 0.5757 - acc: 0.7500 - val_loss: 0.5963 - val_acc: 0.7273
+Epoch 17/20
+ - 54s - loss: 0.5720 - acc: 0.7500 - val_loss: 0.5944 - val_acc: 0.7273
+Epoch 18/20
+ - 54s - loss: 0.5768 - acc: 0.7500 - val_loss: 0.5926 - val_acc: 0.7273
+Epoch 19/20
+ - 55s - loss: 0.5685 - acc: 0.7500 - val_loss: 0.5912 - val_acc: 0.7273
+Epoch 20/20
+ - 55s - loss: 0.5681 - acc: 0.7500 - val_loss: 0.5901 - val_acc: 0.7273
+acc: 77.78%
+y_test: [1 1 0 0 1 1 1 1 1]
+y_pred: [[0.68572134]
+ [0.7041112 ]
+ [0.7016256 ]
+ [0.704506  ]
+ [0.7044548 ]
+ [0.70282733]
+ [0.7008091 ]
+ [0.70451725]
+ [0.68952787]]
+y_test: [1 1 0 0 1 1 1 1 1]
+y_pred: [[ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]]
+CV Fold 3/5
+TRAIN/VAL: 35 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 20, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 38, 39, 40]
+TEST: 9 [17, 18, 21, 22, 23, 37, 41, 42, 43]
+Train on 24 samples, validate on 11 samples
+Epoch 1/20
+ - 57s - loss: 0.6830 - acc: 0.5000 - val_loss: 0.5871 - val_acc: 0.9091
+Epoch 2/20
+ - 56s - loss: 0.6502 - acc: 0.6667 - val_loss: 0.5465 - val_acc: 0.9091
+Epoch 3/20
+ - 57s - loss: 0.6543 - acc: 0.6667 - val_loss: 0.5231 - val_acc: 0.9091
+Epoch 4/20
+ - 57s - loss: 0.6404 - acc: 0.6667 - val_loss: 0.5079 - val_acc: 0.9091
+Epoch 5/20
+ - 58s - loss: 0.6347 - acc: 0.6667 - val_loss: 0.4947 - val_acc: 0.9091
+Epoch 6/20
+ - 58s - loss: 0.6261 - acc: 0.6667 - val_loss: 0.4830 - val_acc: 0.9091
+Epoch 7/20
+ - 61s - loss: 0.6314 - acc: 0.6667 - val_loss: 0.4727 - val_acc: 0.9091
+Epoch 8/20
+ - 65s - loss: 0.6294 - acc: 0.6667 - val_loss: 0.4652 - val_acc: 0.9091
+Epoch 9/20
+ - 59s - loss: 0.6279 - acc: 0.6667 - val_loss: 0.4589 - val_acc: 0.9091
+Epoch 10/20
+ - 61s - loss: 0.6307 - acc: 0.6667 - val_loss: 0.4559 - val_acc: 0.9091
+Epoch 11/20
+ - 63s - loss: 0.6430 - acc: 0.6667 - val_loss: 0.4564 - val_acc: 0.9091
+Epoch 12/20
+ - 62s - loss: 0.6325 - acc: 0.6667 - val_loss: 0.4579 - val_acc: 0.9091
+Epoch 13/20
+ - 62s - loss: 0.6416 - acc: 0.6667 - val_loss: 0.4595 - val_acc: 0.9091
+Epoch 14/20
+ - 63s - loss: 0.6274 - acc: 0.6667 - val_loss: 0.4619 - val_acc: 0.9091
+Epoch 15/20
+ - 63s - loss: 0.6326 - acc: 0.6667 - val_loss: 0.4654 - val_acc: 0.9091
+Epoch 16/20
+ - 63s - loss: 0.6210 - acc: 0.6667 - val_loss: 0.4692 - val_acc: 0.9091
+Epoch 17/20
+ - 64s - loss: 0.6291 - acc: 0.6667 - val_loss: 0.4732 - val_acc: 0.9091
+Epoch 18/20
+ - 64s - loss: 0.6133 - acc: 0.6667 - val_loss: 0.4761 - val_acc: 0.9091
+Epoch 19/20
+ - 63s - loss: 0.6234 - acc: 0.6667 - val_loss: 0.4789 - val_acc: 0.9091
+Epoch 20/20
+ - 65s - loss: 0.6351 - acc: 0.6667 - val_loss: 0.4819 - val_acc: 0.9091
+acc: 77.78%
+y_test: [0 0 1 1 1 1 1 1 1]
+y_pred: [[0.6669866 ]
+ [0.67206305]
+ [0.68671733]
+ [0.6925701 ]
+ [0.68028635]
+ [0.63422215]
+ [0.6968765 ]
+ [0.69284797]
+ [0.6341952 ]]
+y_test: [0 0 1 1 1 1 1 1 1]
+y_pred: [[ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]]
+CV Fold 4/5
+TRAIN/VAL: 36 [1, 2, 5, 6, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 28, 30, 31, 32, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43]
+TEST: 8 [0, 3, 4, 12, 13, 27, 29, 36]
+Train on 25 samples, validate on 11 samples
+Epoch 1/20
+ - 73s - loss: 0.6716 - acc: 0.5600 - val_loss: 0.6448 - val_acc: 0.6364
+Epoch 2/20
+ - 72s - loss: 0.5896 - acc: 0.8000 - val_loss: 0.6523 - val_acc: 0.6364
+Epoch 3/20
+ - 71s - loss: 0.5523 - acc: 0.8000 - val_loss: 0.6608 - val_acc: 0.6364
+Epoch 4/20
+ - 72s - loss: 0.5443 - acc: 0.8000 - val_loss: 0.6707 - val_acc: 0.6364
+Epoch 5/20
+ - 73s - loss: 0.5159 - acc: 0.8000 - val_loss: 0.6800 - val_acc: 0.6364
+Epoch 6/20
+ - 73s - loss: 0.5118 - acc: 0.8000 - val_loss: 0.6882 - val_acc: 0.6364
+Epoch 7/20
+ - 74s - loss: 0.5088 - acc: 0.8000 - val_loss: 0.6956 - val_acc: 0.6364
+Epoch 8/20
+ - 75s - loss: 0.5041 - acc: 0.8000 - val_loss: 0.7024 - val_acc: 0.6364
+Epoch 9/20
+ - 83s - loss: 0.5028 - acc: 0.8000 - val_loss: 0.7087 - val_acc: 0.6364
+Epoch 10/20
+ - 77s - loss: 0.5044 - acc: 0.8000 - val_loss: 0.7146 - val_acc: 0.6364
+Epoch 11/20
+ - 77s - loss: 0.5022 - acc: 0.8000 - val_loss: 0.7202 - val_acc: 0.6364
+Epoch 12/20
+ - 76s - loss: 0.5017 - acc: 0.8000 - val_loss: 0.7254 - val_acc: 0.6364
+Epoch 13/20
+ - 77s - loss: 0.5044 - acc: 0.8000 - val_loss: 0.7302 - val_acc: 0.6364
+Epoch 14/20
+ - 76s - loss: 0.5021 - acc: 0.8000 - val_loss: 0.7345 - val_acc: 0.6364
+Epoch 15/20
+ - 80s - loss: 0.4978 - acc: 0.8000 - val_loss: 0.7383 - val_acc: 0.6364
+Epoch 16/20
+ - 78s - loss: 0.5043 - acc: 0.8000 - val_loss: 0.7411 - val_acc: 0.6364
+Epoch 17/20
+ - 78s - loss: 0.5031 - acc: 0.8000 - val_loss: 0.7433 - val_acc: 0.6364
+Epoch 18/20
+ - 77s - loss: 0.5033 - acc: 0.8000 - val_loss: 0.7447 - val_acc: 0.6364
+Epoch 19/20
+ - 77s - loss: 0.5031 - acc: 0.8000 - val_loss: 0.7453 - val_acc: 0.6364
+Epoch 20/20
+ - 79s - loss: 0.5008 - acc: 0.8000 - val_loss: 0.7453 - val_acc: 0.6364
+acc: 75.00%
+y_test: [1 1 1 0 0 1 1 1]
+y_pred: [[0.8161941 ]
+ [0.81540954]
+ [0.81435347]
+ [0.8179649 ]
+ [0.8162689 ]
+ [0.8162269 ]
+ [0.8175511 ]
+ [0.8162916 ]]
+y_test: [1 1 1 0 0 1 1 1]
+y_pred: [[ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]]
+CV Fold 5/5
+TRAIN/VAL: 36 [0, 1, 2, 3, 4, 6, 8, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 32, 33, 35, 36, 37, 38, 40, 41, 42, 43]
+TEST: 8 [5, 7, 10, 11, 28, 31, 34, 39]
+Train on 25 samples, validate on 11 samples
+Epoch 1/20
+ - 82s - loss: 0.6661 - acc: 0.7600 - val_loss: 0.6549 - val_acc: 0.7273
+Epoch 2/20
+ - 78s - loss: 0.6436 - acc: 0.7600 - val_loss: 0.6337 - val_acc: 0.7273
+Epoch 3/20
+ - 78s - loss: 0.6226 - acc: 0.7600 - val_loss: 0.6208 - val_acc: 0.7273
+Epoch 4/20
+ - 78s - loss: 0.6045 - acc: 0.7600 - val_loss: 0.6136 - val_acc: 0.7273
+Epoch 5/20
+ - 79s - loss: 0.5926 - acc: 0.7600 - val_loss: 0.6087 - val_acc: 0.7273
+Epoch 6/20
+ - 78s - loss: 0.5894 - acc: 0.7600 - val_loss: 0.6047 - val_acc: 0.7273
+Epoch 7/20
+ - 79s - loss: 0.5841 - acc: 0.7600 - val_loss: 0.6013 - val_acc: 0.7273
+Epoch 8/20
+ - 80s - loss: 0.5799 - acc: 0.7600 - val_loss: 0.5984 - val_acc: 0.7273
+Epoch 9/20
+ - 79s - loss: 0.5779 - acc: 0.7600 - val_loss: 0.5959 - val_acc: 0.7273
+Epoch 10/20
+ - 80s - loss: 0.5713 - acc: 0.7600 - val_loss: 0.5937 - val_acc: 0.7273
+Epoch 11/20
+ - 82s - loss: 0.5662 - acc: 0.7600 - val_loss: 0.5919 - val_acc: 0.7273
+Epoch 12/20
+ - 89s - loss: 0.5650 - acc: 0.7600 - val_loss: 0.5904 - val_acc: 0.7273
+Epoch 13/20
+ - 79s - loss: 0.5605 - acc: 0.7600 - val_loss: 0.5894 - val_acc: 0.7273
+Epoch 14/20
+ - 79s - loss: 0.5572 - acc: 0.7600 - val_loss: 0.5886 - val_acc: 0.7273
+Epoch 15/20
+ - 79s - loss: 0.5553 - acc: 0.7600 - val_loss: 0.5869 - val_acc: 0.7273
+Epoch 16/20
+ - 80s - loss: 0.5551 - acc: 0.7600 - val_loss: 0.5860 - val_acc: 0.7273
+Epoch 17/20
+ - 80s - loss: 0.5540 - acc: 0.7600 - val_loss: 0.5860 - val_acc: 0.7273
+Epoch 18/20
+ - 80s - loss: 0.5546 - acc: 0.7600 - val_loss: 0.5860 - val_acc: 0.7273
+Epoch 19/20
+ - 84s - loss: 0.5544 - acc: 0.7600 - val_loss: 0.5860 - val_acc: 0.7273
+Epoch 20/20
+ - 82s - loss: 0.5543 - acc: 0.7600 - val_loss: 0.5860 - val_acc: 0.7273
+acc: 75.00%
+y_test: [1 1 0 0 1 1 1 1]
+y_pred: [[0.7251971]
+ [0.7251971]
+ [0.7251971]
+ [0.7251971]
+ [0.7251971]
+ [0.7251971]
+ [0.7251971]
+ [0.7251971]]
+y_test: [1 1 0 0 1 1 1 1]
+y_pred: [[ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]
+ [ True]]
+75.11% (+/- 2.84%)
+Confusion matrix, without normalization
+[[ 0 11]
+ [ 0 33]]
+Elapsed Time: 01:37:29.31
+
+Process finished with exit code 0
