@@ -25,8 +25,9 @@ if __name__ == "__main__":
     # Time Start
     start_time = time.time()
 
-    project_folder = '/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/'
+    # project_folder = '/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/'
     # project_folder = 'D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/'
+    project_folder = 'C:/Users/curtislacelle/Documents/BIOM5405-ClassProject/'
 
     # LSTMN Parameters:
     lstmn.NUM_CLASS = 2  # Change to two for Healthy vs Diseased binary classification
