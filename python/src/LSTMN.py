@@ -68,8 +68,10 @@ def load_data(folder):
 
     # Labels for time series data
     y = []
+    b = 0
 
     X_file_list = []
+    B_file_list = []
 
     print('Loading: label | file')
     for file_name in file_list:
@@ -89,23 +91,37 @@ def load_data(folder):
             y.append(LABEL_PARK)
             X_file_list.append(file_name)
             print(LABEL_PARK, end='')
+        elif 'blind' in file_name:
+            b += 1
+            B_file_list.append(file_name)
+            print('?', end='')
         else:
             print('~', end='')
         print(' |', file_name)
 
+    print('b =', b)
+
     # Time series data, (only using leg 0 for the time being)
     X = np.empty([len(y), NUM_TIME_SERIES, NUM_FEATURES], float)
+    B = np.empty([b, NUM_TIME_SERIES, NUM_FEATURES], float)
 
     for f_i in range(len(X_file_list)):
         if any(x in file_list[f_i] for x in ['als', 'control', 'hunt', 'park']):
             data = genfromtxt(folder + file_list[f_i], delimiter=',', dtype=float)
             X[f_i] = data
 
+    for b_i in range(b):
+        data = genfromtxt(folder + 'blind' + str(b_i+1) + '.tsv', delimiter=',', dtype=float)
+        B[b_i] = data
+
+
     # Crop time series data
     X_crop = X[:, int(NUM_TS_CROP / 2):int(NUM_TIME_SERIES - NUM_TS_CROP / 2), :]
+    B_crop = B[:, int(NUM_TS_CROP / 2):int(NUM_TIME_SERIES - NUM_TS_CROP / 2), :]
 
     # Downsample time series data
     X_half = X_crop[:, 0::NUM_SKIP_SAMP, :]
+    B_half = B_crop[:, 0::NUM_SKIP_SAMP, :]
 
     # Convert nan to 0
     for s in range(X_half.shape[0]):
@@ -113,39 +129,29 @@ def load_data(folder):
             for f in range(X_half.shape[2]):
                 if np.isnan(X_half[s, t, f]):
                     X_half[s, t, f] = 0
+    for s in range(B_half.shape[0]):
+        for t in range(B_half.shape[1]):
+            for f in range(B_half.shape[2]):
+                if np.isnan(B_half[s, t, f]):
+                    B_half[s, t, f] = 0
 
     # Assert no Inf or nan data
     assert not np.isnan(X_half.any())
+    assert not np.isnan(B_half.any())
 
     X_final = X_half
+    B_final = B_half
 
-    return X_final, np.asarray(y)
+    return X_final, np.asarray(y), B_final
 
 
 def baseline_model(num_lstm_cells=NUM_LSTM_CELLS, num_time_series=(NUM_TIME_SERIES-NUM_TS_CROP)):
-    # The model will be designed in the following manner:
-    # LSTM -> 1 sigmoid Dense Layer
-
     # initialize a sequential keras model
     model = Sequential()
 
     # Input:
     model.add(Dense(NUM_FEATURES, activation='sigmoid',
                     input_shape=(num_time_series, NUM_FEATURES)))
-    # model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
-    # model.add(Dense(NUM_CLASS, activation='relu'))
-    # model.add(Dense(int(NUM_FEATURES/2), activation='relu'))
-    # model.add(Dense(NUM_FEATURES, activation='sigmoid'))
-
-    # CNN 1D
-    # model.add(Conv1D(filters=32,
-    #                  kernel_size=3,
-    #                  padding='same',
-    #                  activation='relu',
-    #                  input_shape=(num_time_series, NUM_FEATURES)))
-    #
-    # # Pooling
-    # model.add(MaxPooling1D(pool_size=2))
 
     # LSTM Master Layer
     model.add(LSTM(num_lstm_cells,
@@ -220,94 +226,98 @@ if __name__ == "__main__":
     print('X_total =', X_total.shape)
     print('y_total = ', y_total.tolist())
 
-    n_timesteps = X_total.shape[1]
-    n_features = X_total.shape[2]
+    LSTM_CELLS = [2, 10, 25, 50, 100]
+    for lstmncell in range(5):
 
-    print("Number Classes:", n_outputs)
-    print("Cropped Time Series Length:", n_timesteps)
-    print("Number Features:", NUM_FEATURES)
 
-    # define 5-fold cross validation test harness
-    kfold = StratifiedKFold(n_splits=NUM_K_SPLIT, shuffle=True)
-    cvscores = []
-    cm_sum = None
+        n_timesteps = X_total.shape[1]
+        n_features = X_total.shape[2]
 
-    # Bagging
-    nbags = 5
+        print("Number Classes:", n_outputs)
+        print("Cropped Time Series Length:", n_timesteps)
+        print("Number Features:", NUM_FEATURES)
 
-    fold_number = 1 # Print logging counter
-    for train_index, test_index in kfold.split(X_total, y_total):
+        # define 5-fold cross validation test harness
+        kfold = StratifiedKFold(n_splits=NUM_K_SPLIT, shuffle=True)
+        cvscores = []
+        cm_sum = None
 
-        print("CV Fold %d/%d" % (fold_number, NUM_K_SPLIT))
-        fold_number += 1
+        # Bagging
+        nbags = 5
 
-        X_train, X_test = X_total[train_index], X_total[test_index]
-        y_train, y_test = y_total[train_index], y_total[test_index]
+        fold_number = 1 # Print logging counter
+        for train_index, test_index in kfold.split(X_total, y_total):
 
-        if NUM_CLASS == 4:
-            y_train = to_categorical(y_train, num_classes=n_outputs)
-            y_test = to_categorical(y_test, num_classes=n_outputs)
+            print("CV Fold %d/%d" % (fold_number, NUM_K_SPLIT))
+            fold_number += 1
 
-        print("TRAIN/VAL:", len(train_index), train_index.tolist())
-        print("TEST:", len(test_index), test_index.tolist())
+            X_train, X_test = X_total[train_index], X_total[test_index]
+            y_train, y_test = y_total[train_index], y_total[test_index]
 
-        # Split validation set from the training set
-        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=VAL_SPLIT)
+            if NUM_CLASS == 4:
+                y_train = to_categorical(y_train, num_classes=n_outputs)
+                y_test = to_categorical(y_test, num_classes=n_outputs)
 
-        # Regular Model
-        model = baseline_model()
-        model.fit(X_train, y_train,
-                  validation_data=(X_val, y_val),
-                  epochs=NUM_EPOCH,
-                  batch_size=BATCH_SIZE,
-                  verbose=2)
-        scores = model.evaluate(X_test, y_test, verbose=2)
-        print("%s: %.2f%%" % (model.metrics_names[1], scores[1] * 100))
-        cvscores.append(scores)
-        y_pred = model.predict(X_test, batch_size=BATCH_SIZE)
+            print("TRAIN/VAL:", len(train_index), train_index.tolist())
+            print("TEST:", len(test_index), test_index.tolist())
 
-        print("y_test:", y_test)
-        print("y_pred:", y_pred)
+            # Split validation set from the training set
+            X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=VAL_SPLIT)
 
-        # classify output predictions
-        if NUM_CLASS == 2:
-            y_pred = (y_pred > 0.5)
-        elif NUM_CLASS == 4:
-            y_ohe = y_pred
-            y_pred = []
-            for y in y_ohe:
-                mx = 0
-                mx_i = None
-                for i in range(4):
-                    if y[i] > mx:
-                        mx_i = i
-                        mx = y[i]
-                y_pred.append(mx_i)
-            y_ohe = y_test
-            y_test = []
-            for y in y_ohe:
-                mx = 0
-                mx_i = None
-                for i in range(4):
-                    if y[i] > mx:
-                        mx_i = i
-                        mx = y[i]
-                y_test.append(mx_i)
+            # Regular Model
+            model = baseline_model(num_lstm_cells=LSTM_CELLS[lstmncell])
+            model.fit(X_train, y_train,
+                      validation_data=(X_val, y_val),
+                      epochs=NUM_EPOCH,
+                      batch_size=BATCH_SIZE,
+                      verbose=2)
+            scores = model.evaluate(X_test, y_test, verbose=2)
+            print("%s: %.2f%%" % (model.metrics_names[1], scores[1] * 100))
+            cvscores.append(scores)
+            y_pred = model.predict(X_test, batch_size=BATCH_SIZE)
 
-        print("y_test:", y_test)
-        print("y_pred:", y_pred)
+            print("y_test:", y_test)
+            print("y_pred:", y_pred)
 
-        # confusion matrix
-        if cm_sum is None:
-            cm_sum = confusion_matrix(y_test, y_pred)
-        else:
-            cm_sum += confusion_matrix(y_test, y_pred)
+            # classify output predictions
+            if NUM_CLASS == 2:
+                y_pred = (y_pred > 0.5)
+            elif NUM_CLASS == 4:
+                y_ohe = y_pred
+                y_pred = []
+                for y in y_ohe:
+                    mx = 0
+                    mx_i = None
+                    for i in range(4):
+                        if y[i] > mx:
+                            mx_i = i
+                            mx = y[i]
+                    y_pred.append(mx_i)
+                y_ohe = y_test
+                y_test = []
+                for y in y_ohe:
+                    mx = 0
+                    mx_i = None
+                    for i in range(4):
+                        if y[i] > mx:
+                            mx_i = i
+                            mx = y[i]
+                    y_test.append(mx_i)
 
-    print("%.2f%% (+/- %.2f%%)" % (np.mean(cvscores), np.std(cvscores)))
+            print("y_test:", y_test)
+            print("y_pred:", y_pred)
 
-    # Plot non-normalized confusion matrix
-    plt.figure()
-    plot_confusion_matrix(cm_sum, classes=class_names, title='Confusion matrix, without normalization')
+            # confusion matrix
+            if cm_sum is None:
+                cm_sum = confusion_matrix(y_test, y_pred)
+            else:
+                cm_sum += confusion_matrix(y_test, y_pred)
+
+        print("%.2f%% (+/- %.2f%%)" % (np.mean(cvscores), np.std(cvscores)))
+
+    # # Plot non-normalized confusion matrix
+    # plt.figure()
+    # plot_confusion_matrix(cm_sum, classes=class_names, title='Confusion matrix, without normalization')
 
     # Time End
     elapsed_time = time.time()
@@ -315,4 +325,4 @@ if __name__ == "__main__":
     minutes, seconds = divmod(rem, 60)
     print("Elapsed Time: {:0>2}:{:0>2}:{:05.2f}".format(int(hours), int(minutes), seconds))
 
-    plt.show()
+    # plt.show()

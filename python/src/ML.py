@@ -25,14 +25,15 @@ if __name__ == "__main__":
     # Time Start
     start_time = time.time()
 
-    # project_folder = '/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/'
+    project_folder = '/media/alexanderfernandes/6686E8B186E882C3/Users/alexanderfernandes/Code/BIOM5405-ClassProject/'
     # project_folder = 'D:/Users/Documents/School/Grad/BIOM5405/project/BIOM5405-ClassProject/'
-    project_folder = 'C:/Users/curtislacelle/Documents/BIOM5405-ClassProject/'
+    # project_folder = 'C:/Users/curtislacelle/Documents/BIOM5405-ClassProject/'
 
     # LSTMN Parameters:
-    lstmn.NUM_CLASS = 2  # Change to two for Healthy vs Diseased binary classification
-    lstmn.NUM_EPOCH = 20
+    lstmn.NUM_CLASS = 4  # Change to two for Healthy vs Diseased binary classification
+    lstmn.NUM_EPOCH = 500
     lstmn.BATCH_SIZE = 500
+    lstmn.NUM_SKIP_SAMP = 10
 
     # Meta Learning Classifier Parameters
     tin_lstm_units = 2
@@ -57,7 +58,7 @@ if __name__ == "__main__":
         class_names = ['Healthy', 'Diseased']
 
     # Load Data
-    X_total, y_total = lstmn.load_data(project_folder + 'data/')
+    X_total, y_total, b = lstmn.load_data(project_folder + 'data/')
 
     print('X_total =', X_total.shape)
     print('y_total = ', y_total.tolist())
@@ -317,11 +318,8 @@ if __name__ == "__main__":
 
         final_pred = np.array([])
         for i in range(0, len(X_test)):
-            max_vote = mode([model_1_pred[i],
-                             model_2_pred[i],
-                             model_3_pred[i],
-                             model_4_pred[i],
-                             model_5_pred[i]])
+            p = [model_1_pred[i], model_2_pred[i], model_3_pred[i], model_4_pred[i], model_5_pred[i]]
+            max_vote = mode([x for x in p if x is not None])
             final_pred = np.append(final_pred, max_vote[0])
 
 

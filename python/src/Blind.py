@@ -57,6 +57,7 @@ if __name__ == "__main__":
     X_total, y_total, B_total = lstmn.load_data(project_folder + 'data/')
 
     print('X_total =', X_total.shape)
+    print('B_total =', B_total.shape)
     print('y_total = ', y_total.tolist())
 
     n_timesteps = X_total.shape[1]
@@ -495,9 +496,9 @@ if __name__ == "__main__":
 
     for p in range(len(final_4_pred)):
         if final_2_pred[p] == LBL_CTRL:
-            c4 = 'H'
+            c2 = 'H'
         elif final_2_pred[p] == LBL_ALS:
-            c4 = 'D'
+            c2 = 'D'
 
         if final_4_pred[p] == LBL_CTRL:
             c4 = 'H'
@@ -507,4 +508,4 @@ if __name__ == "__main__":
             c4 = 'HD'
         elif final_4_pred[p] == LBL_PARK:
             c4 = 'PD'
-        print("blind", p+1, ', ', final_2_pred, ', ', final_4_pred, sep='')
+        print("blind", p+1, ', ', c2, ', ', c4, sep='')
