@@ -19,195 +19,6 @@ Loading: label | file
 ? | blind16.tsv
 ? | blind17.tsv
 ? | blind18.tsv
-1 | hunt20.tsv
-1 | hunt3.tsv
-1 | hunt4.tsv
-1 | hunt5.tsv
-1 | hunt6.tsv
-1 | hunt7.tsv
-1 | hunt8.tsv
-1 | park1.tsv
-1 | park14.tsv
-1 | park15.tsv
-1 | park2.tsv
-1 | park3.tsv
-1 | park4.tsv
-1 | park5.tsv
-1 | park6.tsv
-1 | park7.tsv
-1 | park8.tsv
-? | blind2.tsv
-? | blind20.tsv
-? | blind3.tsv
-? | blind4.tsv
-? | blind5.tsv
-? | blind6.tsv
-? | blind7.tsv
-? | blind8.tsv
-? | blind9.tsv
-0 | control1.tsv
-0 | control14.tsv
-0 | control15.tsv
-0 | control16.tsv
-0 | control2.tsv
-0 | control3.tsv
-0 | control4.tsv
-0 | control5.tsv
-0 | control6.tsv
-0 | control7.tsv
-0 | control8.tsv
-~ | file_index.txt
-1 | hunt1.tsv
-1 | hunt14.tsv
-1 | hunt15.tsv
-1 | hunt16.tsv
-1 | hunt17.tsv
-1 | hunt18.tsv
-1 | hunt19.tsv
-? | blind19.tsv
-1 | hunt2.tsv
-b = 20
-X_total = (44, 7000, 20)
-B_total = (20, 7000, 20)
-y_total =  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1]
-Number Classes: 1
-Cropped Time Series Length: 7000
-Number Features: 20
-Bootstrap Sample Set:
-Tiny   | train: (132, 7000, 20) test: (20, 7000, 20)
-Small  | train: (132, 7000, 20) test: (20, 7000, 20)
-Medium | train: (132, 7000, 20) test: (20, 7000, 20)
-Large  | train: (132, 7000, 20) test: (20, 7000, 20)
-Huge   | train: (132, 7000, 20) test: (20, 7000, 20)
-Tiny Model 2 units
-X_train: (92, 7000, 20)
-Small Model 10 units
-X_train: (92, 7000, 20)
-Medium Model 25 units
-X_train: (92, 7000, 20)
-Large Model 50 units
-X_train: (92, 7000, 20)
-Huge Model 100 units
-X_train: (92, 7000, 20)
-Tiny   pred: [[ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]]
-Small  pred: [[ True]
- [ True]
- [ True]
- [False]
- [ True]
- [ True]
- [False]
- [ True]
- [False]
- [ True]
- [ True]
- [False]
- [ True]
- [ True]
- [ True]
- [False]
- [ True]
- [False]
- [ True]
- [ True]]
-Medium pred: [[ True]
- [ True]
- [ True]
- [False]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]]
-Large  pred: [[ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [False]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [False]
- [ True]
- [ True]
- [False]
- [False]
- [ True]
- [False]
- [False]
- [ True]]
-Huge   pred: [[ True]
- [False]
- [ True]
- [False]
- [False]
- [False]
- [False]
- [ True]
- [False]
- [ True]
- [ True]
- [ True]
- [ True]
- [ True]
- [False]
- [False]
- [ True]
- [ True]
- [ True]
- [ True]]
-Loading: label | file
-1 | als1.tsv
-1 | als2.tsv
-1 | als3.tsv
-1 | als4.tsv
-1 | als5.tsv
-1 | als6.tsv
-1 | als7.tsv
-1 | als8.tsv
-? | blind1.tsv
-? | blind10.tsv
-? | blind11.tsv
-? | blind12.tsv
-? | blind13.tsv
-? | blind14.tsv
-? | blind15.tsv
-? | blind16.tsv
-? | blind17.tsv
-? | blind18.tsv
 2 | hunt20.tsv
 2 | hunt3.tsv
 2 | hunt4.tsv
@@ -256,53 +67,53 @@ Loading: label | file
 ? | blind19.tsv
 2 | hunt2.tsv
 b = 20
-X_total = (44, 7000, 20)
+X_total = (44, 14000, 20)
 y_total =  [1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2]
 Number Classes: 4
-Cropped Time Series Length: 7000
+Cropped Time Series Length: 14000
 Number Features: 20
 Bootstrap Sample Set:
-Tiny   | train: (132, 7000, 20) test: (20, 7000, 20)
-Small  | train: (132, 7000, 20) test: (20, 7000, 20)
-Medium | train: (132, 7000, 20) test: (20, 7000, 20)
-Large  | train: (132, 7000, 20) test: (20, 7000, 20)
-Huge   | train: (132, 7000, 20) test: (20, 7000, 20)
+Tiny   | train: (132, 14000, 20) test: (20, 14000, 20)
+Small  | train: (132, 14000, 20) test: (20, 14000, 20)
+Medium | train: (132, 14000, 20) test: (20, 14000, 20)
+Large  | train: (132, 14000, 20) test: (20, 14000, 20)
+Huge   | train: (132, 14000, 20) test: (20, 14000, 20)
 Tiny Model 2 units
-X_train: (92, 7000, 20)
+X_train: (92, 14000, 20)
 Small Model 10 units
-X_train: (92, 7000, 20)
+X_train: (92, 14000, 20)
 Medium Model 25 units
-X_train: (92, 7000, 20)
+X_train: (92, 14000, 20)
 Large Model 50 units
-X_train: (92, 7000, 20)
+X_train: (92, 14000, 20)
 Huge Model 100 units
-X_train: (92, 7000, 20)
-Tiny   pred: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-Small  pred: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-Medium pred: [1, 0, 1, 0, 0, 1, 0, 1, 3, 1, 0, 3, 0, 0, 1, 0, 1, 1, 0, 0]
-Large  pred: [1, 0, 3, 0, 0, 1, 0, 1, 3, 1, 0, 0, 3, 0, 1, 0, 1, 1, 3, 3]
-Huge   pred: [1, 0, 1, 0, 3, 0, 0, 1, 3, 1, 3, 0, 3, 0, 0, 0, 1, 1, 0, 3]
-blind1, D, ALS
-blind2, D, H
-blind3, D, ALS
-blind4, H, H
-blind5, D, H
-blind6, D, ALS
-blind7, D, H
-blind8, D, ALS
-blind9, D, PD
-blind10, D, ALS
-blind11, D, H
-blind12, D, H
-blind13, D, ALS
-blind14, D, H
-blind15, D, ALS
-blind16, H, H
-blind17, D, ALS
-blind18, D, ALS
-blind19, D, H
-blind20, D, ALS
-Elapsed Time: 10:14:12.06
+X_train: (92, 14000, 20)
+Tiny   pred: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+Small  pred: [1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0]
+Medium pred: [1, 1, 1, 0, 3, 1, 0, 1, 3, 1, 0, 0, 0, 0, 1, 3, 1, 0, 0, 3]
+Large  pred: [1, 1, 1, 0, 0, 1, 0, 1, 3, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0]
+Huge   pred: [1, 3, 0, 1, 3, 1, 3, 0, 0, 0, 3, 0, 3, 1, 1, 1, 1, 0, 3, 3]
+blind1ALS
+blind2H
+blind3ALS
+blind4H
+blind5H
+blind6ALS
+blind7H
+blind8ALS
+blind9H
+blind10ALS
+blind11H
+blind12H
+blind13H
+blind14H
+blind15ALS
+blind16H
+blind17ALS
+blind18H
+blind19H
+blind20H
+Elapsed Time: 10:25:24.44
 
 Process finished with exit code 0
 
@@ -340,14 +151,14 @@ blind5,  H,    PD   0
 blind6,  ALS,  HD   0
 blind7,  H,    PD   0
 blind8,  ALS,  HD   0
-blind9,  PD,   PD   1
-blind10, ALS, ALS   1
-blind11, H,   PD    0
-blind12, H,   H     1
-blind13, ALS, HD    0
-blind14, H,   ALS   0
-blind15, ALS, H     0
-blind16, H,   ALS   0
-blind17, ALS, HD    0
-blind18, ALS, HD    0
-blind19, H,   H     1
+blind9,  H,    PD   1
+blind10, ALS,  ALS  1
+blind11, H,    PD   0
+blind12, H,    H    1
+blind13, H,    HD   0
+blind14, H,    ALS  0
+blind15, ALS,  H    0
+blind16, H,    ALS  0
+blind17, ALS,  HD   0
+blind18, H,    HD   0
+blind19, H,    H    1
